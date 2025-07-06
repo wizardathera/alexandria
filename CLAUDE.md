@@ -43,7 +43,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ### Code Quality Standards
 - **Never exceed 500 lines per file** - split modules when necessary
 - **Never hallucinate** libraries, functions, or file paths
-- Always read `docs/PLANNING.md` and the relevant `docs/TASK_*.md` files before coding
+- Always read `docs/PLANNING.md` and `docs/TASKS.md` before coding
 - **PEP8 compliance** with type hints for all functions
 - **Google-style docstrings** required for every function
 - **Include detailed comments** explaining non-obvious code
@@ -155,33 +155,55 @@ alexandria-app/
 
 ## 📚 Documentation Structure
 
-**Strategic Planning Documents**:
-- **docs/PLANNING_OVERVIEW.md** - Overall project strategy and current phase focus
-- **docs/PLANNING_PHASES.md** - Detailed phase descriptions and deliverables
-- **docs/PLANNING_TASKS_BREAKDOWN.md** - Task breakdowns and priorities
-- **docs/PLANNING_DEPENDENCIES.md** - Dependencies and sequencing
-- **docs/PLANNING_NOTES_HISTORY.md** - Historical context and archived sections
-- **docs/ROADMAP_OVERVIEW.md** - Strategic roadmap overview and objectives
-- **docs/ROADMAP_PHASES.md** - Detailed phase descriptions and deliverables
-- **docs/ROADMAP_FEATURES.md** - Feature-level plans and priorities
-- **docs/ROADMAP_TIMELINES.md** - Time-based planning and schedules
-- **docs/ROADMAP_NOTES_HISTORY.md** - Historical context and archived sections
-- **docs/ARCHITECTURE_OVERVIEW.md** - High-level system architecture and design decisions
-- **docs/ARCHITECTURE_BACKEND.md** - Backend architecture and services
-- **docs/ARCHITECTURE_FRONTEND.md** - Frontend architecture and components
-- **docs/ARCHITECTURE_DATA_MODEL.md** - Data models and database design
-- **docs/ARCHITECTURE_AI_SERVICES.md** - AI/ML services and RAG implementation
+**New Streamlined System** (Effective 2025-07-05):
 
-**Development Documents**:
-- **CLAUDE.md** - This file with development guidance and standards  
-- **README.md** - User-facing installation and usage instructions
-- **docs/TASK.md** - Main task tracking file
-- **docs/TASK_BACKEND.md** - Backend development tasks
-- **docs/TASK_FRONTEND.md** - Frontend development tasks
-- **docs/TASK_INFRASTRUCTURE.md** - Infrastructure and deployment tasks
-- **docs/TASK_SECURITY_COMPLIANCE.md** - Security and compliance tasks
-- **docs/TASK_PRODUCT_FEATURES.md** - Product feature development tasks
-- **docs/TASK_MISC.md** - Miscellaneous tasks
+**Core Documentation Files**:
+- **docs/PLANNING.md** - High-level planning overview of phases and milestones
+- **docs/ROADMAP.md** - Business milestones and feature progression (not detailed tasks)
+- **docs/ARCHITECTURE.md** - Combined technical architecture and design decisions
+- **docs/TASKS.md** - Current, active Epics and Stories only
+- **docs/TECHNICAL_SPECIFICATIONS.md** - Technical stack and implementation details
+- **docs/PRODUCT_REQUIREMENTS.md** - Complete product requirements and specifications
+- **docs/DEPLOYMENT_GUIDE.md** - Setup, deployment, and operations guide
+- **docs/SECURITY_PRIVACY_PLAN.md** - Security and compliance considerations
+
+**Documentation Rules**:
+- **All tasks are now tracked only in `TASKS.md`**
+- **Completed Epics and Stories are removed from `TASKS.md` and archived via Git history**
+- **No duplication of tasks or subtasks in planning or roadmap documents**
+- **`PLANNING.md` contains only phase summaries and references `TASKS.md`**
+- **`ROADMAP.md` contains only business milestones, not implementation tasks**
+- **`ARCHITECTURE.md` is the sole technical architecture reference**
+- **Claude must never reintroduce deprecated documentation files**
+
+**Deprecated Files** (Never Reference Again):
+- All PLANNING_* files (PLANNING_PHASES.md, PLANNING_TASKS_BREAKDOWN.md, etc.)
+- All ROADMAP_* files (ROADMAP_PHASES.md, ROADMAP_TIMELINES.md, etc.)
+- All TASK_* files (TASK_BACKEND.md, TASK_FRONTEND.md, etc.)
+- All ARCHITECTURE_* files (ARCHITECTURE_OVERVIEW.md, ARCHITECTURE_BACKEND.md, etc.)
+- FUTURE_FEATURES.md
+- ARCHITECTURE_ARCHIVE_2024.md
+
+### Task Management Workflow
+
+**Task Lifecycle**:
+1. **New tasks** are added to `TASKS.md` with Epic, Story, Labels, Priority, and Status
+2. **Active work** is tracked with Status updates (To Do → In Progress → Done)
+3. **Completed tasks** are immediately removed from `TASKS.md` (archived in Git history)
+4. **Cross-references** use only the current active task numbers in `TASKS.md`
+
+**Epic and Story Structure**:
+- **Epic**: Large feature area (e.g., "Frontend Migration", "Backend Stability")
+- **Story**: Specific deliverable within an epic (e.g., "Fix Search Endpoint Functionality")
+- **Subtasks**: Implementation steps listed as bullets under each story
+- **Labels**: Technology tags (frontend, backend, ai, etc.)
+- **Priority**: High/Medium/Low based on impact and dependencies
+
+**Documentation Synchronization**:
+- **No manual synchronization required** - single source of truth in each file
+- **No cross-file duplication** - each file has distinct purpose
+- **Git history** serves as archive for completed work
+- **`TASKS.md`** is the only file requiring frequent updates
 
 ## 📋 Development Commands
 

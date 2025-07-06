@@ -1,0 +1,57 @@
+{
+  "database_connectivity": true,
+  "existing_embeddings": false,
+  "embeddings_count": 0,
+  "What is psychology?": {
+    "search_time": 0.4044320583343506,
+    "result_count": 5
+  },
+  "Human behavior and social interactions": {
+    "search_time": 0.391571044921875,
+    "result_count": 5
+  },
+  "Games people play": {
+    "search_time": 0.20076823234558105,
+    "result_count": 5
+  },
+  "Reading and learning": {
+    "search_time": 0.19805240631103516,
+    "result_count": 5
+  },
+  "basic_vector_search": true,
+  "enhanced_search": true,
+  "enhanced_search_time": 1.0702955722808838,
+  "enhanced_results_count": 5,
+  "api_logic": true,
+  "rag_query_time": 2.7520811557769775,
+  "enhanced_api_time": 0.613544225692749,
+  "performance_benchmarks": true,
+  "avg_performance": 0.21093008253309461,
+  "benchmark_details": [
+    {
+      "query_length": 6,
+      "avg_time": 0.19911456108093262,
+      "result_count": 10,
+      "passes_target": true
+    },
+    {
+      "query_length": 44,
+      "avg_time": 0.23971343040466309,
+      "result_count": 10,
+      "passes_target": true
+    },
+    {
+      "query_length": 140,
+      "avg_time": 0.19396225611368814,
+      "result_count": 10,
+      "passes_target": true
+    }
+  ],
+  "metadata_completeness": true,
+  "metadata_coverage": {
+    "required_present": 8,
+    "required_total": 8,
+    "optional_present": 7,
+    "optional_total": 7
+  }
+}

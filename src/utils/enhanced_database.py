@@ -151,9 +151,9 @@ class EnhancedChromaVectorDB(EnhancedVectorDatabaseInterface):
             
             logger.info(f"Enhanced Chroma database initialized at: {persist_dir}")
             
-            # Create enhanced collections
+            # Create enhanced collections if they don't exist
             await self.create_collection(DEFAULT_COLLECTION_NAME, {
-                "description": "Unified content collection for all Alexandria modules",
+                "description": "Enhanced content collection for all Alexandria modules",
                 "version": "1.3.0",
                 "supports_modules": ["library", "lms", "marketplace"]
             })
@@ -334,8 +334,14 @@ class EnhancedChromaVectorDB(EnhancedVectorDatabaseInterface):
         try:
             collection = self._collections.get(collection_name)
             if not collection:
-                logger.error(f"Collection not found: {collection_name}")
-                return {"documents": [], "metadatas": [], "distances": [], "ids": []}
+                # Try to load existing collection
+                try:
+                    collection = self.client.get_collection(collection_name)
+                    self._collections[collection_name] = collection
+                    logger.info(f"Loaded existing collection: {collection_name}")
+                except ValueError:
+                    logger.error(f"Collection not found: {collection_name}")
+                    return {"documents": [], "metadatas": [], "distances": [], "ids": []}
             
             # Log search parameters
             logger.info(f"Enhanced search query: '{query_text}' with n_results={n_results}")

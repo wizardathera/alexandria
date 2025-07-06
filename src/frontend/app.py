@@ -173,11 +173,21 @@ def get_books_list() -> List[Dict]:
 def get_enhanced_content_list() -> List[Dict]:
     """Get enhanced content list with metadata from the backend."""
     try:
-        response = requests.get(f"{API_BASE_URL}/api/enhanced/content")
+        response = requests.get(f"{API_BASE_URL}/api/enhanced/content", timeout=15)
         response.raise_for_status()
         return response.json()
+    except requests.exceptions.Timeout:
+        st.error("⏰ Request timed out while loading your library. Please try refreshing the page.")
+        return []
+    except requests.exceptions.ConnectionError:
+        st.error("🔌 Unable to connect to the backend service. Please check if the server is running.")
+        if st.button("🔄 Retry Loading Library", key="retry_library_load"):
+            st.rerun()
+        return []
     except requests.exceptions.RequestException as e:
-        st.error(f"Failed to fetch enhanced content: {e}")
+        st.error(f"❌ Failed to fetch your library: {str(e)[:100]}...")
+        if st.button("🔄 Retry Loading Library", key="retry_library_load_2"):
+            st.rerun()
         return []
 
 def enhanced_search(query: str, module_filter: str = None, content_type_filter: str = None, n_results: int = 10) -> List[Dict]:
@@ -474,6 +484,147 @@ def render_enhanced_search():
     with st.expander("📊 Search Analytics", expanded=False):
         search_component.render_search_analytics()
 
+def render_empty_library_state():
+    """Render an attractive empty state when no books are available."""
+    st.markdown("---")
+    
+    # Center the empty state content
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        # Empty state illustration
+        st.markdown("""
+        <div style="text-align: center; padding: 2rem 0;">
+            <div style="font-size: 4rem; margin-bottom: 1rem;">📚</div>
+            <h2 style="color: #666; margin-bottom: 0.5rem;">Your Library is Empty</h2>
+            <p style="color: #888; font-size: 1.1rem; margin-bottom: 2rem;">
+                Upload your first book to start asking questions and exploring content with AI.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Action buttons
+        col_a, col_b = st.columns(2)
+        
+        with col_a:
+            if st.button("📤 Upload Your First Book", 
+                        type="primary", 
+                        use_container_width=True,
+                        help="Go to Book Management to upload content"):
+                st.session_state.page_selector = "📖 Book Management"
+                st.rerun()
+        
+        with col_b:
+            if st.button("🔍 Learn More", 
+                        use_container_width=True,
+                        help="Learn about Alexandria's features"):
+                st.session_state.show_getting_started = True
+                st.rerun()
+    
+    # Getting started guide
+    if st.session_state.get('show_getting_started', False):
+        st.markdown("---")
+        st.subheader("🚀 Getting Started with Alexandria")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("""
+            **📖 Supported File Types:**
+            - PDF documents
+            - EPUB books
+            - Word documents (DOC, DOCX)
+            - Plain text files (TXT)
+            - HTML documents
+            """)
+        
+        with col2:
+            st.markdown("""
+            **💡 What You Can Do:**
+            - Ask questions about your books
+            - Get AI-powered answers with source citations
+            - Explore relationships between content
+            - Export conversations for later reference
+            """)
+        
+        st.info("💡 **Tip:** Start with a PDF or EPUB file for the best experience. Processing typically takes 30-60 seconds depending on file size.")
+        
+        if st.button("❌ Close Guide"):
+            st.session_state.show_getting_started = False
+            st.rerun()
+    
+    # Feature preview
+    st.markdown("---")
+    st.subheader("🎯 Preview: What Your Chat Will Look Like")
+    
+    # Mock conversation preview
+    with st.chat_message("user"):
+        st.write("What are the main themes in this book?")
+    
+    with st.chat_message("assistant"):
+        st.write("Once you upload a book, I'll be able to analyze its content and provide detailed answers like this, complete with:")
+        st.write("• **Source citations** with page numbers")
+        st.write("• **Confidence scores** for answer reliability")
+        st.write("• **Related content** suggestions")
+        st.write("• **Conversation export** options")
+        
+        # Mock confidence indicator
+        st.markdown("**Confidence:** 🟢 High (85%)")
+        
+        # Mock sources
+        with st.expander("📚 Sources (Preview)", expanded=False):
+            st.write("1. **Your Book Title** - Page 42")
+            st.write("2. **Your Book Title** - Page 156")
+            st.write("3. **Your Book Title** - Page 203")
+
+
+def render_error_retry_options(question: str, query_mode: str, selected_content_id: str = None, 
+                              max_results: int = 10, include_relationships: bool = True, 
+                              module_filter: str = None, current_user=None):
+    """Render retry options after an error occurs."""
+    st.markdown("---")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("🔄 Retry Question", use_container_width=True, key=f"retry_{int(datetime.now().timestamp())}"):
+            # Set a flag to retry the question
+            st.session_state.retry_question = question
+            st.session_state.retry_mode = query_mode
+            st.session_state.retry_content_id = selected_content_id
+            st.session_state.retry_max_results = max_results
+            st.session_state.retry_include_relationships = include_relationships
+            st.session_state.retry_module_filter = module_filter
+            st.rerun()
+    
+    with col2:
+        if st.button("🔧 Check Backend Status", use_container_width=True, key=f"status_{int(datetime.now().timestamp())}"):
+            try:
+                health_response = requests.get(f"{API_BASE_URL}/api/v1/health", timeout=10)
+                if health_response.status_code == 200:
+                    st.success("✅ Backend service is running")
+                else:
+                    st.error(f"❌ Backend returned status: {health_response.status_code}")
+            except requests.exceptions.RequestException as e:
+                st.error(f"❌ Cannot reach backend: {str(e)[:50]}...")
+    
+    with col3:
+        if st.button("📚 Go to Library", use_container_width=True, key=f"library_{int(datetime.now().timestamp())}"):
+            st.session_state.page_selector = "📖 Book Management"
+            st.rerun()
+    
+    # Auto-retry functionality (if retry flags are set)
+    if st.session_state.get('retry_question'):
+        st.info("🔄 Retrying your question...")
+        # Clear retry flags
+        retry_question = st.session_state.retry_question
+        st.session_state.retry_question = None
+        
+        # Simulate re-asking the question by updating the chat input
+        st.session_state.retry_in_progress = True
+        st.rerun()
+
+
 def render_qa_chat():
     """Render the enhanced Q&A chat interface with multi-module support and permission awareness."""
     st.title("💬 Enhanced Multi-Module Q&A Chat")
@@ -492,10 +643,11 @@ def render_qa_chat():
                 st.rerun()
     
     # Enhanced Content and Module Selection with Permission Filtering
-    enhanced_content = get_enhanced_content_list()
+    with st.spinner("📚 Loading your library..."):
+        enhanced_content = get_enhanced_content_list()
     
     if not enhanced_content:
-        st.warning("📚 No content available. Please upload books or add content first.")
+        render_empty_library_state()
         return
     
     # Apply permission filtering to content list
@@ -606,10 +758,15 @@ def render_qa_chat():
         # Get AI response from enhanced RAG service
         with st.chat_message("assistant"):
             spinner_text = f"🔍 Searching across {query_mode.lower()}..."
-            with st.spinner(spinner_text):
-                try:
+            status_placeholder = st.empty()
+            
+            try:
+                with st.spinner(spinner_text):
+                    status_placeholder.info("🔄 Connecting to AI service...")
+                    
                     # Determine API endpoint and payload based on query mode
                     if query_mode == "Single Content Query":
+                        status_placeholder.info("📖 Analyzing your selected content...")
                         # Use traditional chat API for single content
                         response = requests.post(
                             f"{API_BASE_URL}/api/chat/query",
@@ -622,6 +779,7 @@ def render_qa_chat():
                             timeout=30
                         )
                     else:
+                        status_placeholder.info("🔍 Searching across multiple modules...")
                         # Use enhanced multi-module search API with permission filtering
                         search_payload = {
                             "query": question,
@@ -641,96 +799,138 @@ def render_qa_chat():
                             json=search_payload,
                             timeout=30
                         )
+                
+                status_placeholder.info("🧠 Processing AI response...")
+                status_placeholder.empty()  # Clear status after success
+                
+                if response.status_code == 200:
+                    result = response.json()
                     
-                    if response.status_code == 200:
-                        result = response.json()
+                    # Process response based on API type
+                    if query_mode == "Single Content Query":
+                        # Traditional chat API response
+                        st.session_state.conversation_id = result.get('conversation_id')
                         
-                        # Process response based on API type
-                        if query_mode == "Single Content Query":
-                            # Traditional chat API response
-                            st.session_state.conversation_id = result.get('conversation_id')
-                            
-                            assistant_message = EnhancedChatMessage(
-                                message_type='assistant',
-                                content=result.get('answer', 'No response received.'),
-                                timestamp=datetime.now(),
-                                sources=result.get('sources', []),
-                                confidence=calculate_confidence_score(result.get('sources', [])),
-                                token_usage=result.get('token_usage', {}),
-                                message_id=result.get('message_id')
-                            )
-                        else:
-                            # Enhanced search API response with permission filtering
-                            search_results = result.get('results', [])
-                            
-                            # Apply permission-aware filtering to results
-                            permission_filtered_results, permission_stats = render_permission_aware_search_results(
-                                search_results, current_user
-                            )
-                            
-                            # Filter results by confidence threshold
-                            confidence_filtered_results = [
-                                r for r in permission_filtered_results 
-                                if r.get('similarity_score', 0.0) >= confidence_threshold
-                            ]
-                            
-                            # Generate conversational answer from search results
-                            answer_content = generate_answer_from_search_results(
-                                confidence_filtered_results, question, query_mode
-                            )
-                            
-                            # Add permission filtering info to answer if results were filtered
-                            if permission_stats['filtered_results'] > 0:
-                                permission_note = f"\n\n*Note: Search included permission filtering. {permission_stats['accessible_results']} of {permission_stats['total_results']} results were accessible to your {current_user.role.value} role.*"
-                                answer_content += permission_note
-                            
-                            # Convert search results to source format
-                            sources = convert_search_results_to_sources(confidence_filtered_results)
-                            
-                            assistant_message = EnhancedChatMessage(
-                                message_type='assistant',
-                                content=answer_content,
-                                timestamp=datetime.now(),
-                                sources=sources,
-                                confidence=calculate_confidence_score(sources),
-                                token_usage={
-                                    "search_time_ms": result.get('search_time_ms', 0),
-                                    "total_results": result.get('total_results', 0),
-                                    "permission_filtered": permission_stats['filtered_results'],
-                                    "confidence_filtered": len(permission_filtered_results) - len(confidence_filtered_results),
-                                    "final_results": len(confidence_filtered_results),
-                                    "user_role": current_user.role.value
-                                },
-                                message_id=f"enhanced_search_{int(datetime.now().timestamp())}"
-                            )
-                        
-                        # Add to enhanced history
-                        add_enhanced_message(assistant_message)
-                        
-                        # Render the response (will show immediately due to rerun)
-                        st.rerun()
-                        
-                    else:
-                        # Error handling
-                        error_message = EnhancedChatMessage(
+                        assistant_message = EnhancedChatMessage(
                             message_type='assistant',
-                            content=f"❌ Sorry, I encountered an error processing your question. Please try again.",
+                            content=result.get('answer', 'No response received.'),
                             timestamp=datetime.now(),
-                            confidence=0.0
+                            sources=result.get('sources', []),
+                            confidence=calculate_confidence_score(result.get('sources', [])),
+                            token_usage=result.get('token_usage', {}),
+                            message_id=result.get('message_id')
                         )
-                        add_enhanced_message(error_message)
-                        st.rerun()
+                    else:
+                        # Enhanced search API response with permission filtering
+                        search_results = result.get('results', [])
                         
-                except requests.exceptions.RequestException as e:
-                    # Network error handling
+                        # Apply permission-aware filtering to results
+                        permission_filtered_results, permission_stats = render_permission_aware_search_results(
+                            search_results, current_user
+                        )
+                        
+                        # Filter results by confidence threshold
+                        confidence_filtered_results = [
+                            r for r in permission_filtered_results 
+                            if r.get('similarity_score', 0.0) >= confidence_threshold
+                        ]
+                        
+                        # Generate conversational answer from search results
+                        answer_content = generate_answer_from_search_results(
+                            confidence_filtered_results, question, query_mode
+                        )
+                        
+                        # Add permission filtering info to answer if results were filtered
+                        if permission_stats['filtered_results'] > 0:
+                            permission_note = f"\n\n*Note: Search included permission filtering. {permission_stats['accessible_results']} of {permission_stats['total_results']} results were accessible to your {current_user.role.value} role.*"
+                            answer_content += permission_note
+                        
+                        # Convert search results to source format
+                        sources = convert_search_results_to_sources(confidence_filtered_results)
+                        
+                        assistant_message = EnhancedChatMessage(
+                            message_type='assistant',
+                            content=answer_content,
+                            timestamp=datetime.now(),
+                            sources=sources,
+                            confidence=calculate_confidence_score(sources),
+                            token_usage={
+                                "search_time_ms": result.get('search_time_ms', 0),
+                                "total_results": result.get('total_results', 0),
+                                "permission_filtered": permission_stats['filtered_results'],
+                                "confidence_filtered": len(permission_filtered_results) - len(confidence_filtered_results),
+                                "final_results": len(confidence_filtered_results),
+                                "user_role": current_user.role.value
+                            },
+                            message_id=f"enhanced_search_{int(datetime.now().timestamp())}"
+                        )
+                    
+                    # Add to enhanced history
+                    add_enhanced_message(assistant_message)
+                    
+                    # Render the response (will show immediately due to rerun)
+                    st.rerun()
+                        
+                else:
+                    # Enhanced error handling with retry options
+                    status_placeholder.empty()
+                    error_code = response.status_code
+                    
+                    if error_code == 404:
+                        error_content = "❌ The requested content was not found. This might happen if the book was recently deleted or is still processing."
+                    elif error_code == 500:
+                        error_content = "🔧 The AI service encountered an internal error. This is usually temporary."
+                    elif error_code == 429:
+                        error_content = "⏳ Too many requests. Please wait a moment before trying again."
+                    else:
+                        error_content = f"❌ Unexpected error (Code: {error_code}). Please try again."
+                    
                     error_message = EnhancedChatMessage(
                         message_type='assistant',
-                        content=f"🔌 Unable to connect to the RAG service. Please check your connection and try again.",
+                        content=error_content,
                         timestamp=datetime.now(),
                         confidence=0.0
                     )
                     add_enhanced_message(error_message)
-                    st.rerun()
+                    
+                    # Show retry options
+                    render_error_retry_options(question, query_mode, selected_content_id, max_results, include_relationships, module_filter, current_user)
+                        
+            except requests.exceptions.Timeout:
+                # Timeout error handling
+                status_placeholder.empty()
+                error_message = EnhancedChatMessage(
+                    message_type='assistant',
+                    content="⏰ Request timed out. The AI service might be busy. Please try again in a moment.",
+                    timestamp=datetime.now(),
+                    confidence=0.0
+                )
+                add_enhanced_message(error_message)
+                render_error_retry_options(question, query_mode, selected_content_id, max_results, include_relationships, module_filter, current_user)
+                
+            except requests.exceptions.ConnectionError:
+                # Connection error handling
+                status_placeholder.empty()
+                error_message = EnhancedChatMessage(
+                    message_type='assistant',
+                    content="🔌 Unable to connect to the AI service. Please check if the backend server is running and try again.",
+                    timestamp=datetime.now(),
+                    confidence=0.0
+                )
+                add_enhanced_message(error_message)
+                render_error_retry_options(question, query_mode, selected_content_id, max_results, include_relationships, module_filter, current_user)
+                
+            except requests.exceptions.RequestException as e:
+                # General request error handling
+                status_placeholder.empty()
+                error_message = EnhancedChatMessage(
+                    message_type='assistant',
+                    content=f"🔧 Network error occurred: {str(e)[:100]}... Please check your connection and try again.",
+                    timestamp=datetime.now(),
+                    confidence=0.0
+                )
+                add_enhanced_message(error_message)
+                render_error_retry_options(question, query_mode, selected_content_id, max_results, include_relationships, module_filter, current_user)
     
     # Enhanced Chat Controls
     if enhanced_messages:

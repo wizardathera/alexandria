@@ -464,6 +464,9 @@ class EmbeddingService:
             self.provider = CachedEmbeddingProvider(base_provider)
         else:
             self.provider = base_provider
+        
+        # Set default model for compatibility
+        self.default_model = base_provider.default_model
     
     async def embed_documents(
         self,

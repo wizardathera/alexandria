@@ -369,8 +369,10 @@ class HybridSearchEngine:
                 where_clause["book_id"] = book_id
             
             # Perform vector search
+            from src.utils.config import get_settings
+            settings = get_settings()
             results = await self.vector_db.query(
-                collection_name="dbc_content",  # TODO: Make configurable
+                collection_name=settings.chroma_collection_name,
                 query_text=query,
                 n_results=config.max_results_per_strategy,
                 where=where_clause if where_clause else None

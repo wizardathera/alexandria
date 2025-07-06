@@ -664,6 +664,337 @@ async def clear_processing_cache(
 
 
 # ========================================
+# Content Relationship Endpoints
+# ========================================
+
+class RelationshipResponse(BaseModel):
+    """Response model for content relationships."""
+    related_content_id: str
+    related_title: str
+    related_author: Optional[str]
+    related_content_type: str
+    related_module_type: str
+    relationship_type: str
+    strength: float
+    confidence: float
+    explanation: Optional[str]
+    related_semantic_tags: List[str] = []
+
+
+class GraphDataResponse(BaseModel):
+    """Response model for graph visualization data."""
+    nodes: List[Dict[str, Any]]
+    edges: List[Dict[str, Any]]
+    stats: Dict[str, Any]
+
+
+@router.get("/content/{content_id}/relationships")
+async def get_content_relationships(
+    content_id: str,
+    limit: int = Query(10, ge=1, le=50, description="Number of relationships to return"),
+    relationship_type: Optional[str] = Query(None, description="Filter by relationship type"),
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Get relationships for a specific content item.
+    
+    This endpoint provides:
+    - Content-to-content relationships
+    - Relationship strength and confidence scores
+    - Semantic explanations of relationships
+    - Related content metadata
+    """
+    try:
+        content_service = await get_content_service()
+        
+        # Verify content exists and user has access
+        content = await content_service.get_content_item(content_id, current_user)
+        if not content:
+            raise HTTPException(status_code=404, detail="Content not found or access denied")
+        
+        # Get relationships
+        from src.models import ContentRelationshipType
+        rel_type_filter = None
+        if relationship_type:
+            try:
+                rel_type_filter = ContentRelationshipType(relationship_type)
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid relationship type: {relationship_type}")
+        
+        relationships = await content_service.get_content_relationships(
+            content_id=content_id,
+            relationship_type=rel_type_filter
+        )
+        
+        # Convert to response format with enhanced data
+        relationship_responses = []
+        for rel in relationships:
+            # Get target content details
+            target_content = await content_service.get_content_item(rel.target_content_id, current_user)
+            if target_content:  # Only include if user has access
+                response = RelationshipResponse(
+                    related_content_id=rel.target_content_id,
+                    related_title=target_content.title,
+                    related_author=target_content.author,
+                    related_content_type=target_content.content_type.value,
+                    related_module_type=target_content.module_type.value,
+                    relationship_type=rel.relationship_type.value,
+                    strength=rel.strength,
+                    confidence=rel.confidence,
+                    explanation=rel.context,
+                    related_semantic_tags=target_content.topics
+                )
+                relationship_responses.append(response)
+        
+        # Sort by strength and limit
+        relationship_responses.sort(key=lambda r: r.strength, reverse=True)
+        limited_relationships = relationship_responses[:limit]
+        
+        return {
+            "content_id": content_id,
+            "relationships": [rel.dict() for rel in limited_relationships],
+            "total_found": len(relationship_responses),
+            "returned": len(limited_relationships)
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get relationships for {content_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Relationships retrieval failed: {str(e)}")
+
+
+@router.get("/relationships", response_model=GraphDataResponse)
+async def get_relationships_graph(
+    content_ids: Optional[str] = Query(None, description="Comma-separated content IDs to include"),
+    limit: int = Query(100, ge=10, le=500, description="Maximum number of nodes"),
+    min_strength: float = Query(0.3, ge=0.0, le=1.0, description="Minimum relationship strength"),
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Get relationship graph data for visualization.
+    
+    This endpoint provides:
+    - Graph nodes (content items)
+    - Graph edges (relationships)
+    - Graph statistics and metadata
+    - Frontend-compatible data structure
+    """
+    try:
+        content_service = await get_content_service()
+        
+        # Get content items to include
+        if content_ids:
+            # Specific content IDs provided
+            content_id_list = [cid.strip() for cid in content_ids.split(",")]
+            content_items = []
+            for cid in content_id_list:
+                content = await content_service.get_content_item(cid, current_user)
+                if content:
+                    content_items.append(content)
+        else:
+            # Get all accessible content
+            content_items = await content_service.list_content_items(
+                user=current_user,
+                limit=limit,
+                offset=0
+            )
+        
+        if not content_items:
+            return GraphDataResponse(
+                nodes=[],
+                edges=[],
+                stats={"total_nodes": 0, "total_edges": 0, "message": "No content available for graph visualization"}
+            )
+        
+        # Build nodes
+        nodes = []
+        content_id_to_index = {}
+        for i, content in enumerate(content_items):
+            content_id_to_index[content.content_id] = i
+            nodes.append({
+                "id": content.content_id,
+                "title": content.title,
+                "author": content.author,
+                "content_type": content.content_type.value,
+                "module_type": content.module_type.value,
+                "topics": content.topics,
+                "size": min(max(content.text_length or 1000, 1000), 10000),  # Size based on text length
+                "color": _get_node_color_by_type(content.content_type.value),
+                "created_at": content.created_at.isoformat()
+            })
+        
+        # Build edges
+        edges = []
+        content_ids = [content.content_id for content in content_items]
+        
+        for content in content_items:
+            relationships = await content_service.get_content_relationships(content.content_id)
+            
+            for rel in relationships:
+                # Only include if target is in our node set and meets strength threshold
+                if (rel.target_content_id in content_ids and 
+                    rel.strength >= min_strength):
+                    
+                    edges.append({
+                        "source": rel.source_content_id,
+                        "target": rel.target_content_id,
+                        "relationship_type": rel.relationship_type.value,
+                        "strength": rel.strength,
+                        "confidence": rel.confidence,
+                        "weight": rel.strength,  # For visualization
+                        "discovered_by": rel.discovered_by,
+                        "human_verified": rel.human_verified,
+                        "context": rel.context
+                    })
+        
+        # Calculate graph statistics
+        stats = {
+            "total_nodes": len(nodes),
+            "total_edges": len(edges),
+            "average_connections": len(edges) / len(nodes) if nodes else 0,
+            "content_types": list(set(node["content_type"] for node in nodes)),
+            "module_types": list(set(node["module_type"] for node in nodes)),
+            "relationship_types": list(set(edge["relationship_type"] for edge in edges)),
+            "average_strength": sum(edge["strength"] for edge in edges) / len(edges) if edges else 0,
+            "min_strength_filter": min_strength
+        }
+        
+        return GraphDataResponse(
+            nodes=nodes,
+            edges=edges,
+            stats=stats
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get relationships graph: {e}")
+        raise HTTPException(status_code=500, detail=f"Graph generation failed: {str(e)}")
+
+
+def _get_node_color_by_type(content_type: str) -> str:
+    """Get color for graph node based on content type."""
+    color_map = {
+        "book": "#3498db",      # Blue
+        "article": "#2ecc71",   # Green
+        "document": "#f39c12",  # Orange
+        "course": "#9b59b6",    # Purple
+        "lesson": "#e74c3c",    # Red
+        "quiz": "#1abc9c",      # Teal
+        "marketplace_item": "#34495e"  # Dark gray
+    }
+    return color_map.get(content_type, "#95a5a6")  # Default gray
+
+
+@router.post("/relationships/discover")
+async def discover_relationships(
+    content_id: str = Query(..., description="Content ID to discover relationships for"),
+    max_relationships: int = Query(20, ge=1, le=100, description="Maximum relationships to discover"),
+    min_confidence: float = Query(0.5, ge=0.0, le=1.0, description="Minimum confidence threshold"),
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Discover new relationships for a content item using AI.
+    
+    This endpoint provides:
+    - AI-powered relationship discovery
+    - Semantic similarity analysis
+    - Confidence scoring
+    - Background processing option
+    """
+    try:
+        content_service = await get_content_service()
+        
+        # Verify content exists
+        content = await content_service.get_content_item(content_id, current_user)
+        if not content:
+            raise HTTPException(status_code=404, detail="Content not found or access denied")
+        
+        # Get enhanced embedding service for relationship discovery
+        enhanced_embedding_service = await get_enhanced_embedding_service()
+        
+        # Get all other content for comparison
+        all_content = await content_service.list_content_items(
+            user=current_user,
+            limit=1000,  # Large limit for relationship discovery
+            offset=0
+        )
+        
+        # Filter out the source content
+        candidate_content = [c for c in all_content if c.content_id != content_id]
+        
+        if not candidate_content:
+            return {
+                "content_id": content_id,
+                "discovered_relationships": [],
+                "message": "No other content available for relationship discovery"
+            }
+        
+        # Use graph retrieval engine for relationship discovery
+        from src.utils.graph_retrieval import GraphSearchEngine
+        graph_engine = GraphSearchEngine()
+        
+        # Build documents for graph construction
+        documents = []
+        for content_item in [content] + candidate_content:
+            documents.append((
+                content_item.content_id,
+                content_item.title + " " + (content_item.description or ""),
+                {
+                    "title": content_item.title,
+                    "author": content_item.author,
+                    "content_type": content_item.content_type.value,
+                    "topics": content_item.topics
+                }
+            ))
+        
+        # Build knowledge graph
+        await graph_engine.build_graph_from_documents(documents, similarity_threshold=min_confidence)
+        
+        # Find related content
+        related_content = graph_engine.find_related_content(
+            node_id=content_id,
+            max_distance=2
+        )
+        
+        # Convert to relationship format
+        discovered_relationships = []
+        for related_id, score, distance in related_content[:max_relationships]:
+            related_item = next((c for c in candidate_content if c.content_id == related_id), None)
+            if related_item:
+                discovered_relationships.append({
+                    "related_content_id": related_id,
+                    "related_title": related_item.title,
+                    "related_author": related_item.author,
+                    "related_content_type": related_item.content_type.value,
+                    "relationship_type": "similar",  # Default for discovered relationships
+                    "strength": score,
+                    "confidence": score * 0.8,  # Slightly lower confidence for discovered
+                    "distance": distance,
+                    "explanation": f"Discovered semantic similarity (distance: {distance})",
+                    "related_semantic_tags": related_item.topics
+                })
+        
+        return {
+            "content_id": content_id,
+            "discovered_relationships": discovered_relationships,
+            "total_candidates_analyzed": len(candidate_content),
+            "relationships_found": len(discovered_relationships),
+            "discovery_parameters": {
+                "max_relationships": max_relationships,
+                "min_confidence": min_confidence
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Relationship discovery failed for {content_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Relationship discovery failed: {str(e)}")
+
+
+# ========================================
 # Health and Status Endpoints
 # ========================================
 

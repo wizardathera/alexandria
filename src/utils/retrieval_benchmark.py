@@ -218,7 +218,7 @@ class StrategyBenchmarker:
         self,
         queries: List[BenchmarkQuery],
         vector_db,
-        collection_name: str = "dbc_content"
+        collection_name: Optional[str] = None
     ) -> PerformanceMetrics:
         """
         Benchmark vector similarity search.
@@ -232,6 +232,12 @@ class StrategyBenchmarker:
             PerformanceMetrics: Performance metrics
         """
         logger.info(f"Benchmarking vector search with {len(queries)} queries")
+        
+        # Use default collection name if not provided
+        if collection_name is None:
+            from src.utils.config import get_settings
+            settings = get_settings()
+            collection_name = settings.chroma_collection_name
         
         response_times = []
         successful_queries = 0

@@ -117,21 +117,67 @@ class PermissionManager:
     
     def filter_accessible_content(self, user_permissions: UserPermissions, content_list: List[Dict]) -> List[Dict]:
         """Filter content list to only include items the user can access."""
+        import logging
         accessible_content = []
         
-        for content in content_list:
-            # Create content permissions from content metadata
-            content_permissions = ContentPermissions(
-                content_id=content.get('content_id', ''),
-                visibility=ContentVisibility(content.get('visibility', 'public')),
-                owner_id=content.get('owner_id', 'default_user'),
-                organization_id=content.get('organization_id'),
-                allowed_roles=[UserRole(role) for role in content.get('allowed_roles', ['reader'])],
-                allowed_users=content.get('allowed_users', [])
-            )
-            
-            if self.can_access_content(user_permissions, content_permissions):
-                accessible_content.append(content)
+        for i, content in enumerate(content_list):
+            try:
+                # Check if content is a dictionary - handle unexpected string format
+                if isinstance(content, str):
+                    logging.warning(f"filter_accessible_content: Content at index {i} is string instead of dict: {content[:100]}...")
+                    # Convert string to minimal dict with content_id
+                    content = {
+                        'content_id': str(content).replace(' ', '_').replace('-', '_'),
+                        'visibility': 'public',
+                        'owner_id': 'default_user',
+                        'organization_id': None,
+                        'allowed_roles': ['reader'],
+                        'allowed_users': [],
+                        'title': f"Content_{i}",
+                        'content_type': 'unknown',
+                        'module_type': 'library'
+                    }
+                elif not isinstance(content, dict):
+                    logging.warning(f"filter_accessible_content: Content at index {i} is unexpected type {type(content)}: {content}")
+                    continue  # Skip non-dict, non-string items
+                
+                # Safely extract content_id and ensure it's a string
+                content_id = content.get('content_id', '')
+                if not isinstance(content_id, str):
+                    content_id = str(content_id) if content_id else f"content_{i}"
+                
+                # Safely extract other fields with defaults
+                visibility = content.get('visibility', 'public')
+                owner_id = content.get('owner_id', 'default_user')
+                organization_id = content.get('organization_id')
+                allowed_roles = content.get('allowed_roles', ['reader'])
+                allowed_users = content.get('allowed_users', [])
+                
+                # Ensure allowed_roles is a list
+                if not isinstance(allowed_roles, list):
+                    allowed_roles = ['reader']
+                
+                # Ensure allowed_users is a list
+                if not isinstance(allowed_users, list):
+                    allowed_users = []
+                
+                # Create content permissions from content metadata
+                content_permissions = ContentPermissions(
+                    content_id=content_id,
+                    visibility=ContentVisibility(visibility),
+                    owner_id=str(owner_id) if owner_id else 'default_user',
+                    organization_id=str(organization_id) if organization_id else None,
+                    allowed_roles=[UserRole(role) for role in allowed_roles if role in [r.value for r in UserRole]],
+                    allowed_users=[str(user) for user in allowed_users]
+                )
+                
+                if self.can_access_content(user_permissions, content_permissions):
+                    accessible_content.append(content)
+                    
+            except Exception as e:
+                logging.warning(f"filter_accessible_content: Error processing content at index {i}: {e}")
+                # Continue processing other items rather than failing completely
+                continue
         
         return accessible_content
     

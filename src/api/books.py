@@ -5,7 +5,7 @@ This module provides endpoints for uploading, ingesting, and managing books
 in various formats (PDF, EPUB, DOC, TXT, HTML).
 """
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Form
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -88,16 +88,18 @@ async def upload_book(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: Optional[str] = None,
-    author: Optional[str] = None
+    author: Optional[str] = None,
+    metadata: Optional[str] = Form(None)
 ):
     """
-    Upload a book file for ingestion.
+    Upload a book file for ingestion with enhanced metadata support.
     
     Args:
         background_tasks: FastAPI background tasks
         file: Uploaded book file
-        title: Optional book title (extracted if not provided)
-        author: Optional book author (extracted if not provided)
+        title: Optional book title (deprecated, use metadata instead)
+        author: Optional book author (deprecated, use metadata instead)
+        metadata: JSON string containing enhanced metadata from frontend
         
     Returns:
         BookUploadResponse: Upload confirmation with book metadata
@@ -131,6 +133,24 @@ async def upload_book(
                    f"Maximum size: {settings.max_upload_size_mb} MB"
         )
     
+    # Process enhanced metadata from frontend
+    enhanced_metadata = {}
+    if metadata:
+        try:
+            enhanced_metadata = json.loads(metadata)
+            logger.info(f"Received enhanced metadata: {enhanced_metadata}")
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid metadata JSON: {e}")
+            enhanced_metadata = {}
+    
+    # Extract metadata with precedence: enhanced_metadata > individual params > defaults
+    final_title = enhanced_metadata.get('title') or title or Path(file.filename).stem
+    final_author = enhanced_metadata.get('author') or author or 'Unknown'
+    content_type = enhanced_metadata.get('content_type', 'book').lower()
+    language = enhanced_metadata.get('language', 'english').lower()
+    module_type = enhanced_metadata.get('module_type', 'library')
+    visibility = enhanced_metadata.get('visibility', 'public')
+    
     # Generate unique book ID
     book_id = str(uuid.uuid4())
     
@@ -150,17 +170,21 @@ async def upload_book(
         logger.error(f"Failed to save book file: {e}")
         raise HTTPException(status_code=500, detail="Failed to save uploaded file")
     
-    # Create service metadata for ingestion
+    # Create service metadata for ingestion with enhanced metadata
     service_metadata = ServiceBookMetadata(
         book_id=book_id,
-        title=title or Path(file.filename).stem,
-        author=author,
+        title=final_title,
+        author=final_author,
         file_type=file_extension,
         file_name=file.filename,
         file_path=str(file_path),
         file_size=file_size,
         upload_date=datetime.now(),
-        user_id=None  # Phase 1: single-user
+        user_id=None,  # Phase 1: single-user
+        content_type=content_type,
+        language=language,
+        module_type=module_type,
+        visibility=visibility
     )
     
     # Start background ingestion task
@@ -176,8 +200,8 @@ async def upload_book(
     # Create response metadata
     response_metadata = BookMetadata(
         id=book_id,
-        title=service_metadata.title,
-        author=service_metadata.author,
+        title=final_title,
+        author=final_author,
         file_type=file_extension,
         file_size=file_size,
         upload_date=service_metadata.upload_date,

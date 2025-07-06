@@ -371,29 +371,58 @@ async def list_enhanced_content(
             offset=offset
         )
         
-        # Convert to enhanced format
+        # Convert to enhanced format with safe fallbacks
         enhanced_items = []
         for content in content_items:
-            enhanced_items.append({
-                "content_id": content.content_id,
-                "title": content.title,
-                "author": content.author,
-                "content_type": content.content_type.value,
-                "module_type": content.module_type.value,
-                "visibility": content.visibility.value,
-                "processing_status": content.processing_status.value,
-                "created_at": content.created_at.isoformat(),
-                "updated_at": content.updated_at.isoformat(),
-                "processed_at": content.processed_at.isoformat() if content.processed_at else None,
-                "text_length": content.text_length,
-                "chunk_count": content.chunk_count,
-                "topics": content.topics,
-                "language": content.language,
-                "reading_level": content.reading_level,
-                "file_path": content.file_path,
-                "file_size": content.file_size,
-                "mime_type": content.mime_type
-            })
+            try:
+                # Build content item with safe fallbacks for missing metadata
+                enhanced_item = {
+                    "content_id": content.content_id,
+                    "title": content.title or "Untitled",
+                    "author": content.author or "Unknown",
+                    "content_type": content.content_type.value if content.content_type else "document",
+                    "module_type": content.module_type.value if content.module_type else "library",
+                    "visibility": content.visibility.value if content.visibility else "private",
+                    "processing_status": content.processing_status.value if content.processing_status else "pending",
+                    "created_at": content.created_at.isoformat() if content.created_at else datetime.now().isoformat(),
+                    "updated_at": content.updated_at.isoformat() if content.updated_at else datetime.now().isoformat(),
+                    "processed_at": content.processed_at.isoformat() if content.processed_at else None,
+                    "text_length": content.text_length or 0,
+                    "chunk_count": content.chunk_count or 0,
+                    "topics": content.topics if content.topics is not None else [],
+                    "language": content.language or "en",
+                    "reading_level": content.reading_level or "unknown",
+                    "file_path": content.file_path or "",
+                    "file_size": content.file_size or 0,
+                    "mime_type": getattr(content, 'mime_type', getattr(content, 'file_type', 'application/octet-stream'))
+                }
+                
+                enhanced_items.append(enhanced_item)
+                
+            except Exception as item_error:
+                # Log error for individual item but continue processing others
+                logger.warning(f"Error processing content item {content.content_id}: {item_error}")
+                # Add minimal safe item to avoid breaking the response
+                enhanced_items.append({
+                    "content_id": getattr(content, 'content_id', 'unknown'),
+                    "title": "Error: Could not load metadata",
+                    "author": "Unknown",
+                    "content_type": "document",
+                    "module_type": "library",
+                    "visibility": "private",
+                    "processing_status": "failed",
+                    "created_at": datetime.now().isoformat(),
+                    "updated_at": datetime.now().isoformat(),
+                    "processed_at": None,
+                    "text_length": 0,
+                    "chunk_count": 0,
+                    "topics": [],
+                    "language": "en",
+                    "reading_level": "unknown",
+                    "file_path": "",
+                    "file_size": 0,
+                    "mime_type": "application/octet-stream"
+                })
         
         # Get total count for pagination
         total_count = await content_service.count_content_items(
@@ -439,6 +468,122 @@ async def list_enhanced_content(
     except Exception as e:
         logger.error(f"Content listing failed: {e}")
         raise HTTPException(status_code=500, detail=f"Content listing failed: {str(e)}")
+
+
+@router.get("/content/sample-format")
+async def get_sample_content_format():
+    """
+    Get sample content format to help frontend developers understand the expected JSON structure.
+    
+    This endpoint returns a sample of what the /api/enhanced/content endpoint would return
+    with actual data, showing all the metadata fields that are available.
+    """
+    sample_content = [
+        {
+            "content_id": "550e8400-e29b-41d4-a716-446655440001",
+            "title": "The Art of Programming",
+            "author": "Jane Doe",
+            "content_type": "book",
+            "module_type": "library",
+            "visibility": "public",
+            "processing_status": "completed",
+            "created_at": "2024-01-15T10:30:00",
+            "updated_at": "2024-01-15T10:35:00",
+            "processed_at": "2024-01-15T10:35:00",
+            "text_length": 145000,
+            "chunk_count": 287,
+            "topics": ["programming", "software development", "best practices"],
+            "language": "en",
+            "reading_level": "intermediate",
+            "file_path": "/uploads/books/art_of_programming.pdf",
+            "file_size": 2048576,
+            "mime_type": "application/pdf"
+        },
+        {
+            "content_id": "550e8400-e29b-41d4-a716-446655440002",
+            "title": "Introduction to Machine Learning",
+            "author": "John Smith",
+            "content_type": "course",
+            "module_type": "lms",
+            "visibility": "premium",
+            "processing_status": "completed",
+            "created_at": "2024-02-01T14:20:00",
+            "updated_at": "2024-02-01T15:00:00",
+            "processed_at": "2024-02-01T15:00:00",
+            "text_length": 85000,
+            "chunk_count": 152,
+            "topics": ["machine learning", "data science", "artificial intelligence"],
+            "language": "en",
+            "reading_level": "advanced",
+            "file_path": "/uploads/courses/ml_intro.pdf",
+            "file_size": 1536000,
+            "mime_type": "application/pdf"
+        },
+        {
+            "content_id": "550e8400-e29b-41d4-a716-446655440003",
+            "title": "Quick Guide to Python",
+            "author": "Alice Johnson",
+            "content_type": "document",
+            "module_type": "library",
+            "visibility": "public",
+            "processing_status": "processing",
+            "created_at": "2024-03-10T09:15:00",
+            "updated_at": "2024-03-10T09:20:00",
+            "processed_at": None,
+            "text_length": None,
+            "chunk_count": None,
+            "topics": [],
+            "language": "en",
+            "reading_level": "beginner",
+            "file_path": "/uploads/documents/python_guide.txt",
+            "file_size": 512000,
+            "mime_type": "text/plain"
+        }
+    ]
+    
+    return {
+        "content": sample_content,
+        "pagination": {
+            "total": 3,
+            "limit": 20,
+            "offset": 0,
+            "has_more": False
+        },
+        "filters": {
+            "module": None,
+            "content_type": None
+        },
+        "user_permissions_applied": True,
+        "format_explanation": {
+            "description": "This shows the exact format returned by /api/enhanced/content",
+            "fields": {
+                "content_id": "UUID string - unique identifier for the content",
+                "title": "string - content title",
+                "author": "string or null - content author/creator",
+                "content_type": "string - type of content (book, course, document, etc.)",
+                "module_type": "string - platform module (library, lms, marketplace)",
+                "visibility": "string - visibility level (public, private, organization, premium)",
+                "processing_status": "string - processing status (pending, processing, completed, failed)",
+                "created_at": "ISO datetime string - when content was created",
+                "updated_at": "ISO datetime string - when content was last updated",
+                "processed_at": "ISO datetime string or null - when processing completed",
+                "text_length": "integer or null - length of extracted text",
+                "chunk_count": "integer or null - number of text chunks created",
+                "topics": "array of strings - AI-extracted topics/tags",
+                "language": "string - content language code",
+                "reading_level": "string - difficulty level (beginner, intermediate, advanced)",
+                "file_path": "string - storage path for the file",
+                "file_size": "integer - file size in bytes",
+                "mime_type": "string - MIME type of the original file"
+            },
+            "notes": [
+                "Fields marked 'or null' will be null when content is still processing",
+                "The 'topics' array will be empty until AI processing completes",
+                "All datetime fields use ISO 8601 format",
+                "Content is filtered based on user permissions"
+            ]
+        }
+    }
 
 
 @router.get("/content/{content_id}")
@@ -992,6 +1137,130 @@ async def discover_relationships(
     except Exception as e:
         logger.error(f"Relationship discovery failed for {content_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Relationship discovery failed: {str(e)}")
+
+
+# ========================================
+# Migration and Data Management Endpoints
+# ========================================
+
+@router.post("/migrate/legacy-books")
+async def migrate_legacy_books_to_content_db(
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Migrate existing books from JSON metadata files to content database.
+    
+    This endpoint helps migrate books that were ingested before the content database
+    integration was added. It checks existing JSON metadata files and creates
+    corresponding records in the unified content database.
+    """
+    try:
+        # Check if user has admin permissions (optional, since Phase 1 is single-user)
+        if current_user and current_user.role != UserRole.ADMIN:
+            logger.warning(f"User {current_user.user_id} attempted legacy migration without admin role")
+            # In Phase 1, we'll allow it since there's only one user
+            # In Phase 2+, uncomment the following line:
+            # raise HTTPException(status_code=403, detail="Admin permissions required for migration")
+        
+        # Get ingestion service and run migration
+        from src.services.ingestion import get_ingestion_service
+        ingestion_service = get_ingestion_service()
+        
+        logger.info("Starting legacy book migration to content database")
+        migration_results = await ingestion_service.migrate_existing_books_to_content_db()
+        
+        successful_migrations = sum(1 for success in migration_results.values() if success)
+        total_books = len(migration_results)
+        
+        response_data = {
+            "migration_completed": True,
+            "total_books_found": total_books,
+            "successful_migrations": successful_migrations,
+            "failed_migrations": total_books - successful_migrations,
+            "migration_results": migration_results,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if successful_migrations == total_books:
+            response_data["message"] = f"✅ Successfully migrated all {total_books} books to content database"
+            logger.info(f"Legacy migration completed successfully: {successful_migrations}/{total_books}")
+        else:
+            response_data["message"] = f"⚠️ Migrated {successful_migrations}/{total_books} books. {total_books - successful_migrations} migrations failed."
+            logger.warning(f"Legacy migration partially completed: {successful_migrations}/{total_books}")
+        
+        return response_data
+        
+    except Exception as e:
+        logger.error(f"Legacy book migration failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")
+
+
+@router.get("/migration/status")
+async def get_migration_status(
+    current_user: Optional[User] = Depends(get_current_user)
+):
+    """
+    Check migration status by comparing JSON metadata files with content database records.
+    
+    This endpoint provides information about how many books need migration
+    and which ones are already migrated.
+    """
+    try:
+        from src.services.ingestion import get_ingestion_service
+        import json
+        from pathlib import Path
+        from src.utils.config import get_settings
+        
+        settings = get_settings()
+        metadata_dir = Path(settings.user_data_path)
+        
+        # Count JSON metadata files
+        json_books = 0
+        json_book_ids = []
+        if metadata_dir.exists():
+            metadata_files = list(metadata_dir.glob("*_metadata.json"))
+            json_books = len(metadata_files)
+            
+            for metadata_file in metadata_files:
+                try:
+                    with open(metadata_file, 'r') as f:
+                        data = json.load(f)
+                        if data.get('book_id'):
+                            json_book_ids.append(data['book_id'])
+                except Exception:
+                    continue
+        
+        # Count content database records
+        content_service = await get_content_service()
+        db_content_items = await content_service.list_content_items(limit=1000)
+        db_books = len(db_content_items)
+        db_book_ids = [item.content_id for item in db_content_items]
+        
+        # Find books that need migration
+        needs_migration = [book_id for book_id in json_book_ids if book_id not in db_book_ids]
+        already_migrated = [book_id for book_id in json_book_ids if book_id in db_book_ids]
+        
+        status_data = {
+            "migration_needed": len(needs_migration) > 0,
+            "json_metadata_files": json_books,
+            "content_database_records": db_books,
+            "books_needing_migration": len(needs_migration),
+            "books_already_migrated": len(already_migrated),
+            "migration_completeness": f"{len(already_migrated)}/{len(json_book_ids)}" if json_book_ids else "0/0",
+            "books_needing_migration_ids": needs_migration[:10],  # Show first 10 for debugging
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        if len(needs_migration) == 0:
+            status_data["message"] = "✅ All books are migrated to content database"
+        else:
+            status_data["message"] = f"⚠️ {len(needs_migration)} books need migration to content database"
+        
+        return status_data
+        
+    except Exception as e:
+        logger.error(f"Migration status check failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Status check failed: {str(e)}")
 
 
 # ========================================

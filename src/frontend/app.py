@@ -109,9 +109,171 @@ def make_api_request(endpoint: str, method: str = "GET", data: Dict = None) -> D
         st.error(f"API request failed: {e}")
         return {}
 
-def upload_book_file(uploaded_file) -> Dict:
-    """Upload a book file to the backend with progress tracking."""
-    if not uploaded_file:
+def extract_metadata_from_file(uploaded_file) -> Dict:
+    """Extract initial metadata from uploaded file."""
+    try:
+        # Get basic metadata from filename and file properties
+        filename = uploaded_file.name
+        file_size_mb = uploaded_file.size / 1024 / 1024
+        
+        # Extract title from filename (remove extension)
+        title = filename.rsplit('.', 1)[0] if '.' in filename else filename
+        
+        # Clean up title (replace underscores/hyphens with spaces, title case)
+        title = title.replace('_', ' ').replace('-', ' ').strip()
+        
+        # Try to extract author from filename patterns like "Author - Title" or "Title by Author"
+        author = "Unknown"
+        if ' - ' in title:
+            parts = title.split(' - ')
+            if len(parts) == 2:
+                # Assume "Author - Title" format
+                author = parts[0].strip()
+                title = parts[1].strip()
+        elif ' by ' in title.lower():
+            parts = title.lower().split(' by ')
+            if len(parts) == 2:
+                # Assume "Title by Author" format
+                title = parts[0].strip()
+                author = parts[1].strip().title()
+        
+        # Determine content type from file extension
+        file_ext = filename.lower().split('.')[-1] if '.' in filename else ''
+        content_type_mapping = {
+            'pdf': 'Book',
+            'epub': 'Book',
+            'doc': 'Document',
+            'docx': 'Document',
+            'txt': 'Article',
+            'html': 'Article'
+        }
+        content_type = content_type_mapping.get(file_ext, 'Document')
+        
+        return {
+            'title': title,
+            'author': author,
+            'content_type': content_type,
+            'filename': filename,
+            'file_size_mb': round(file_size_mb, 2)
+        }
+        
+    except Exception as e:
+        st.warning(f"⚠️ Could not extract metadata: {e}")
+        return {
+            'title': uploaded_file.name,
+            'author': 'Unknown',
+            'content_type': 'Document',
+            'filename': uploaded_file.name,
+            'file_size_mb': round(uploaded_file.size / 1024 / 1024, 2)
+        }
+
+def is_metadata_complete(metadata: Dict) -> bool:
+    """Check if metadata is complete enough to skip confirmation."""
+    title = metadata.get('title', '').strip()
+    author = metadata.get('author', '').strip()
+    
+    # Skip confirmation if both title and author are present and not default values
+    if (title and title != metadata.get('filename', '') and 
+        author and author.lower() not in ['unknown', 'author', '']):
+        return True
+    return False
+
+def render_metadata_confirmation_form(metadata: Dict) -> Dict:
+    """Render metadata confirmation form and return edited metadata."""
+    st.subheader("📝 Confirm Book Metadata")
+    st.info("Please review and edit the metadata before processing your book.")
+    
+    with st.form("metadata_form"):
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            edited_title = st.text_input(
+                "📖 Title *",
+                value=metadata.get('title', ''),
+                help="The book or document title",
+                placeholder="Enter the title..."
+            )
+            
+            edited_author = st.text_input(
+                "👤 Author *",
+                value=metadata.get('author', ''),
+                help="The author or creator",
+                placeholder="Enter the author name..."
+            )
+        
+        with col2:
+            content_type_options = ["Book", "Article", "Document", "Research Paper", "Manual", "Report"]
+            current_content_type = metadata.get('content_type', 'Document')
+            
+            edited_content_type = st.selectbox(
+                "📄 Content Type *",
+                options=content_type_options,
+                index=content_type_options.index(current_content_type) if current_content_type in content_type_options else 0,
+                help="Choose the type of content"
+            )
+            
+            # Optional fields
+            edited_language = st.selectbox(
+                "🌐 Language",
+                options=["English", "Spanish", "French", "German", "Italian", "Portuguese", "Other"],
+                index=0,
+                help="Primary language of the content"
+            )
+        
+        # File information (read-only)
+        st.markdown("**📁 File Information:**")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.text(f"Filename: {metadata.get('filename', 'Unknown')}")
+        with col2:
+            st.text(f"Size: {metadata.get('file_size_mb', 0)} MB")
+        
+        # Form buttons
+        col1, col2, col3 = st.columns([1, 1, 1])
+        
+        with col1:
+            confirm_button = st.form_submit_button("✅ Confirm & Process", type="primary", use_container_width=True)
+        
+        with col2:
+            cancel_button = st.form_submit_button("❌ Cancel", use_container_width=True)
+        
+        with col3:
+            reset_button = st.form_submit_button("🔄 Reset", use_container_width=True)
+    
+    # Handle form submission
+    if confirm_button:
+        # Validate required fields
+        if not edited_title.strip():
+            st.error("❌ Title is required!")
+            return None
+        if not edited_author.strip():
+            st.error("❌ Author is required!")
+            return None
+        
+        # Return edited metadata
+        return {
+            'title': edited_title.strip(),
+            'author': edited_author.strip(),
+            'content_type': edited_content_type,
+            'language': edited_language,
+            'filename': metadata.get('filename', ''),
+            'file_size_mb': metadata.get('file_size_mb', 0)
+        }
+    
+    elif cancel_button:
+        st.session_state.upload_cancelled = True
+        st.warning("Upload cancelled.")
+        return None
+    
+    elif reset_button:
+        st.session_state.reset_metadata = True
+        st.rerun()
+    
+    return None
+
+def upload_book_file_with_metadata(uploaded_file, confirmed_metadata: Dict) -> Dict:
+    """Upload a book file to the backend with confirmed metadata."""
+    if not uploaded_file or not confirmed_metadata:
         return {}
     
     # Create progress indicators
@@ -119,32 +281,46 @@ def upload_book_file(uploaded_file) -> Dict:
     status_text = st.empty()
     
     try:
-        # Step 1: Prepare file
+        # Step 1: Prepare file and metadata
         progress_bar.progress(10)
-        status_text.text("📁 Preparing file for upload...")
+        status_text.text("📁 Preparing file and metadata for upload...")
         
         files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
         
-        # Step 2: Upload file
-        progress_bar.progress(30)
-        status_text.text("⬆️ Uploading file to server...")
+        # Prepare metadata payload
+        metadata_payload = {
+            "title": confirmed_metadata['title'],
+            "author": confirmed_metadata['author'],
+            "content_type": confirmed_metadata['content_type'].lower(),
+            "language": confirmed_metadata.get('language', 'English').lower(),
+            "module_type": "library",  # Default for Phase 1
+            "visibility": "public"     # Default for Phase 1
+        }
         
-        response = requests.post(f"{API_BASE_URL}/api/v1/books/upload", files=files)
+        # Step 2: Upload file with metadata
+        progress_bar.progress(30)
+        status_text.text("⬆️ Uploading file with metadata to server...")
+        
+        response = requests.post(
+            f"{API_BASE_URL}/api/v1/books/upload",
+            files=files,
+            data={"metadata": json.dumps(metadata_payload)}
+        )
         response.raise_for_status()
         
         # Step 3: Processing
         progress_bar.progress(60)
-        status_text.text("🔄 Processing book content...")
+        status_text.text("🔄 Processing book content with metadata...")
         
         result = response.json()
         
         # Step 4: Extracting text
         progress_bar.progress(80)
-        status_text.text("📖 Extracting text and metadata...")
+        status_text.text("📖 Extracting text and creating embeddings...")
         
         # Step 5: Complete
         progress_bar.progress(100)
-        status_text.text("✅ Upload complete!")
+        status_text.text("✅ Upload complete with metadata!")
         
         return result
         
@@ -160,6 +336,14 @@ def upload_book_file(uploaded_file) -> Dict:
         progress_bar.empty()
         status_text.empty()
 
+def upload_book_file(uploaded_file) -> Dict:
+    """Legacy upload function for backward compatibility."""
+    return upload_book_file_with_metadata(uploaded_file, {
+        'title': uploaded_file.name,
+        'author': 'Unknown',
+        'content_type': 'document'
+    })
+
 def get_books_list() -> List[Dict]:
     """Get list of uploaded books from the backend."""
     try:
@@ -172,10 +356,62 @@ def get_books_list() -> List[Dict]:
 
 def get_enhanced_content_list() -> List[Dict]:
     """Get enhanced content list with metadata from the backend."""
+    import logging
     try:
         response = requests.get(f"{API_BASE_URL}/api/enhanced/content", timeout=15)
         response.raise_for_status()
-        return response.json()
+        
+        # Validate API response shape
+        raw_data = response.json()
+        
+        # Handle different response formats
+        if isinstance(raw_data, list):
+            content_list = raw_data
+        elif isinstance(raw_data, dict) and 'content' in raw_data:
+            content_list = raw_data['content']
+        elif isinstance(raw_data, dict) and 'results' in raw_data:
+            content_list = raw_data['results']
+        else:
+            logging.warning(f"get_enhanced_content_list: Unexpected API response format: {type(raw_data)}")
+            content_list = []
+        
+        # Validate each content item
+        validated_content = []
+        for i, item in enumerate(content_list):
+            if isinstance(item, str):
+                logging.warning(f"get_enhanced_content_list: Content item {i} is string instead of dict: {item[:100]}...")
+                # Convert string to minimal dict structure
+                validated_item = {
+                    'content_id': str(item).replace(' ', '_').replace('-', '_'),
+                    'title': f"Content_{i}",
+                    'author': 'Unknown',
+                    'content_type': 'unknown',
+                    'module_type': 'library',
+                    'processing_status': 'unknown',
+                    'visibility': 'public',
+                    'owner_id': 'default_user'
+                }
+                validated_content.append(validated_item)
+            elif isinstance(item, dict):
+                # Ensure required fields exist with defaults
+                validated_item = {
+                    'content_id': str(item.get('content_id', f'content_{i}')),
+                    'title': str(item.get('title', 'Unknown Title')),
+                    'author': str(item.get('author', 'Unknown')),
+                    'content_type': str(item.get('content_type', 'unknown')),
+                    'module_type': str(item.get('module_type', 'library')),
+                    'processing_status': str(item.get('processing_status', 'unknown')),
+                    'visibility': str(item.get('visibility', 'public')),
+                    'owner_id': str(item.get('owner_id', 'default_user')),
+                    **{k: v for k, v in item.items() if k not in ['content_id', 'title', 'author', 'content_type', 'module_type', 'processing_status', 'visibility', 'owner_id']}
+                }
+                validated_content.append(validated_item)
+            else:
+                logging.warning(f"get_enhanced_content_list: Content item {i} has unexpected type {type(item)}: {item}")
+                continue
+        
+        return validated_content
+        
     except requests.exceptions.Timeout:
         st.error("⏰ Request timed out while loading your library. Please try refreshing the page.")
         return []
@@ -188,6 +424,10 @@ def get_enhanced_content_list() -> List[Dict]:
         st.error(f"❌ Failed to fetch your library: {str(e)[:100]}...")
         if st.button("🔄 Retry Loading Library", key="retry_library_load_2"):
             st.rerun()
+        return []
+    except Exception as e:
+        logging.error(f"get_enhanced_content_list: Unexpected error during response validation: {e}")
+        st.error(f"❌ Error processing library data: {str(e)[:50]}...")
         return []
 
 def enhanced_search(query: str, module_filter: str = None, content_type_filter: str = None, n_results: int = 10) -> List[Dict]:
@@ -267,42 +507,145 @@ def render_book_management():
     """Render the enhanced book management interface."""
     st.title("📖 Enhanced Book Management")
     
+    # Initialize session state for upload flow
+    if 'upload_step' not in st.session_state:
+        st.session_state.upload_step = 'file_selection'
+    if 'extracted_metadata' not in st.session_state:
+        st.session_state.extracted_metadata = None
+    if 'upload_cancelled' not in st.session_state:
+        st.session_state.upload_cancelled = False
+    if 'reset_metadata' not in st.session_state:
+        st.session_state.reset_metadata = False
+    
+    # Handle reset metadata flag
+    if st.session_state.reset_metadata:
+        st.session_state.reset_metadata = False
+        st.session_state.upload_step = 'file_selection'
+        st.session_state.extracted_metadata = None
+        st.rerun()
+    
+    # Handle upload cancellation
+    if st.session_state.upload_cancelled:
+        st.session_state.upload_cancelled = False
+        st.session_state.upload_step = 'file_selection'
+        st.session_state.extracted_metadata = None
+        st.rerun()
+    
     # Upload Section
     st.subheader("📤 Upload New Book")
     
-    col1, col2 = st.columns([2, 1])
+    # Step 1: File Selection
+    if st.session_state.upload_step == 'file_selection':
+        col1, col2 = st.columns([2, 1])
+        
+        with col1:
+            uploaded_file = st.file_uploader(
+                "Choose a book file",
+                type=['pdf', 'epub', 'doc', 'docx', 'txt', 'html'],
+                help="Supported formats: PDF, EPUB, DOC, DOCX, TXT, HTML",
+                key="book_file_uploader"
+            )
+        
+        with col2:
+            if st.button("📝 Extract Metadata", type="primary", disabled=uploaded_file is None):
+                if uploaded_file:
+                    # Show file info
+                    st.info(f"📄 File: {uploaded_file.name} ({uploaded_file.size / 1024 / 1024:.1f} MB)")
+                    
+                    # Extract metadata from file
+                    with st.spinner("🔍 Analyzing file and extracting metadata..."):
+                        extracted_metadata = extract_metadata_from_file(uploaded_file)
+                        st.session_state.extracted_metadata = extracted_metadata
+                        
+                        # Check if metadata is complete enough to skip confirmation
+                        if is_metadata_complete(extracted_metadata):
+                            st.success("✅ Metadata looks complete! Auto-processing...")
+                            
+                            # Proceed directly to upload
+                            result = upload_book_file_with_metadata(uploaded_file, extracted_metadata)
+                            if result:
+                                st.success(f"✅ Book '{extracted_metadata['title']}' uploaded successfully!")
+                                
+                                # Show processing result details
+                                if result.get('book_id'):
+                                    st.info(f"📚 Book ID: {result['book_id']}")
+                                if result.get('processing_status'):
+                                    st.info(f"🔄 Status: {result['processing_status'].title()}")
+                                
+                                # Reset upload flow
+                                st.session_state.upload_step = 'file_selection'
+                                st.session_state.extracted_metadata = None
+                                
+                                # Auto-refresh after upload
+                                import time
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to upload book")
+                                st.session_state.upload_step = 'file_selection'
+                        else:
+                            # Show metadata preview and proceed to confirmation
+                            st.success("📋 Metadata extracted! Please review and confirm.")
+                            with st.expander("📋 Extracted Metadata Preview", expanded=True):
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.write(f"**Title:** {extracted_metadata['title']}")
+                                    st.write(f"**Author:** {extracted_metadata['author']}")
+                                with col2:
+                                    st.write(f"**Content Type:** {extracted_metadata['content_type']}")
+                                    st.write(f"**File Size:** {extracted_metadata['file_size_mb']} MB")
+                            
+                            st.session_state.upload_step = 'metadata_confirmation'
+                            st.rerun()
+                else:
+                    st.warning("Please select a file first")
     
-    with col1:
+    # Step 2: Metadata Confirmation
+    elif st.session_state.upload_step == 'metadata_confirmation':
+        # Store uploaded file in session state for next step
         uploaded_file = st.file_uploader(
             "Choose a book file",
             type=['pdf', 'epub', 'doc', 'docx', 'txt', 'html'],
-            help="Supported formats: PDF, EPUB, DOC, DOCX, TXT, HTML"
+            help="Current file selected for processing",
+            key="book_file_uploader_confirmation",
+            disabled=True
         )
-    
-    with col2:
-        if st.button("🚀 Process Book", type="primary"):
-            if uploaded_file:
-                # Show file info before processing
-                st.info(f"📄 File: {uploaded_file.name} ({uploaded_file.size / 1024 / 1024:.1f} MB)")
+        
+        if st.session_state.extracted_metadata:
+            confirmed_metadata = render_metadata_confirmation_form(st.session_state.extracted_metadata)
+            
+            if confirmed_metadata:
+                # Proceed to upload with confirmed metadata
+                st.success("✅ Metadata confirmed! Starting upload...")
                 
-                result = upload_book_file(uploaded_file)
-                if result:
-                    st.success(f"✅ Book '{uploaded_file.name}' uploaded successfully!")
-                    
-                    # Show processing result details
-                    if result.get('book_id'):
-                        st.info(f"📚 Book ID: {result['book_id']}")
-                    if result.get('processing_status'):
-                        st.info(f"🔄 Status: {result['processing_status'].title()}")
-                    
-                    # Auto-refresh after upload
-                    import time
-                    time.sleep(2)
-                    st.rerun()
+                # Re-get the uploaded file from session or require re-upload
+                if uploaded_file:
+                    result = upload_book_file_with_metadata(uploaded_file, confirmed_metadata)
+                    if result:
+                        st.success(f"✅ Book '{confirmed_metadata['title']}' uploaded successfully!")
+                        
+                        # Show processing result details
+                        if result.get('book_id'):
+                            st.info(f"📚 Book ID: {result['book_id']}")
+                        if result.get('processing_status'):
+                            st.info(f"🔄 Status: {result['processing_status'].title()}")
+                        
+                        # Reset upload flow
+                        st.session_state.upload_step = 'file_selection'
+                        st.session_state.extracted_metadata = None
+                        
+                        # Auto-refresh after upload
+                        import time
+                        time.sleep(2)
+                        st.rerun()
+                    else:
+                        st.error("❌ Failed to upload book")
+                        st.session_state.upload_step = 'file_selection'
                 else:
-                    st.error("❌ Failed to upload book")
-            else:
-                st.warning("Please select a file first")
+                    st.error("❌ File was lost during confirmation. Please re-upload.")
+                    st.session_state.upload_step = 'file_selection'
+                    st.session_state.extracted_metadata = None
+                    st.rerun()
     
     # Books Library
     st.subheader("📚 Your Book Library")
@@ -314,7 +657,7 @@ def render_book_management():
         # Display as enhanced cards
         for item in enhanced_content:
             # Dynamic status indicators
-            status = item.get('processing_status', 'unknown')
+            status = safe_get(item, 'processing_status', 'unknown')
             status_icons = {
                 'completed': '✅',
                 'processing': '🔄',
@@ -333,7 +676,7 @@ def render_book_management():
             status_icon = status_icons.get(status, '❓')
             status_color = status_colors.get(status, 'gray')
             
-            with st.expander(f"{status_icon} {item.get('title', 'Unknown Title')}", expanded=False):
+            with st.expander(f"{status_icon} {safe_get(item, 'title', 'Unknown Title')}", expanded=False):
                 # Status indicator bar
                 status_text = f"Status: {status.title()}"
                 if status == 'processing':
@@ -348,22 +691,27 @@ def render_book_management():
                 col1, col2, col3 = st.columns([2, 1, 1])
                 
                 with col1:
-                    st.write(f"**Author:** {item.get('author', 'Unknown')}")
-                    st.write(f"**Content Type:** {item.get('content_type', 'book').title()}")
-                    st.write(f"**Module:** {item.get('module_type', 'library').title()}")
+                    st.write(f"**Author:** {safe_get(item, 'author', 'Unknown')}")
+                    st.write(f"**Content Type:** {safe_get(item, 'content_type', 'book').title()}")
+                    st.write(f"**Module:** {safe_get(item, 'module_type', 'library').title()}")
                     
                     # Enhanced processing info
-                    if item.get('created_at'):
-                        st.write(f"**Added:** {item['created_at'][:10]}")
+                    if safe_get(item, 'created_at'):
+                        created_at = safe_get(item, 'created_at')
+                        if isinstance(created_at, str) and len(created_at) >= 10:
+                            st.write(f"**Added:** {created_at[:10]}")
+                        else:
+                            st.write(f"**Added:** {created_at}")
                     
-                    if item.get('semantic_tags'):
+                    semantic_tags = safe_get(item, 'semantic_tags', [])
+                    if semantic_tags and isinstance(semantic_tags, list):
                         tags_html = " ".join([f"<span style='background-color: #e1f5fe; padding: 2px 6px; border-radius: 12px; font-size: 0.8em;'>{tag}</span>" 
-                                            for tag in item['semantic_tags'][:5]])
+                                            for tag in semantic_tags[:5]])
                         st.markdown(f"**Tags:** {tags_html}", unsafe_allow_html=True)
                 
                 with col2:
-                    if item.get('metadata'):
-                        metadata = item['metadata']
+                    metadata = safe_get(item, 'metadata')
+                    if metadata and isinstance(metadata, dict):
                         st.write("**Metadata:**")
                         st.write(f"📄 Pages: {metadata.get('page_count', 'N/A')}")
                         st.write(f"🌐 Language: {metadata.get('language', 'N/A')}")
@@ -371,41 +719,48 @@ def render_book_management():
                         
                         # Processing metrics
                         if metadata.get('processing_time'):
-                            st.write(f"⏱️ Processed in: {metadata['processing_time']:.1f}s")
+                            processing_time = metadata.get('processing_time')
+                            if isinstance(processing_time, (int, float)):
+                                st.write(f"⏱️ Processed in: {processing_time:.1f}s")
+                            else:
+                                st.write(f"⏱️ Processed in: {processing_time}")
                         if metadata.get('chunks_created'):
                             st.write(f"📝 Text chunks: {metadata['chunks_created']}")
                 
                 with col3:
                     st.write("**Actions:**")
                     
+                    # Get content_id safely
+                    content_id = safe_get(item, 'content_id', f'item_{id(item)}')
+                    
                     # Context-aware actions based on status
                     if status == 'completed':
-                        if st.button(f"💬 Ask Questions", key=f"chat_{item.get('content_id')}"):
+                        if st.button(f"💬 Ask Questions", key=f"chat_{content_id}"):
                             st.session_state.current_book = item
                             st.session_state.page_selector = "💬 Q&A Chat"
                             st.rerun()
                         
-                        if st.button(f"🔍 Explore", key=f"explore_{item.get('content_id')}"):
+                        if st.button(f"🔍 Explore", key=f"explore_{content_id}"):
                             st.session_state.current_book = item
                             st.info("Book selected for exploration!")
                     
                     elif status == 'processing':
                         st.info("🔄 Processing...")
-                        if st.button(f"🔄 Refresh", key=f"refresh_{item.get('content_id')}"):
+                        if st.button(f"🔄 Refresh", key=f"refresh_{content_id}"):
                             st.rerun()
                     
                     elif status == 'failed':
                         st.error("❌ Failed")
-                        if st.button(f"🔄 Retry", key=f"retry_{item.get('content_id')}"):
+                        if st.button(f"🔄 Retry", key=f"retry_{content_id}"):
                             st.warning("Retry functionality coming soon!")
                     
                     else:
-                        if st.button(f"🔍 View", key=f"view_{item.get('content_id')}"):
+                        if st.button(f"🔍 View", key=f"view_{content_id}"):
                             st.session_state.current_book = item
                             st.info("Book details loaded!")
                     
                     # Universal delete action
-                    if st.button(f"🗑️ Delete", key=f"delete_{item.get('content_id')}"):
+                    if st.button(f"🗑️ Delete", key=f"delete_{content_id}"):
                         st.warning("Delete functionality coming soon!")
     else:
         st.info("📚 No books uploaded yet. Upload your first book to get started!")
@@ -420,15 +775,15 @@ def render_book_management():
             st.metric("Total Books", len(enhanced_content))
         
         with col2:
-            processed_count = sum(1 for item in enhanced_content if item.get('processing_status') == 'completed')
+            processed_count = sum(1 for item in enhanced_content if safe_get(item, 'processing_status') == 'completed')
             st.metric("Processed", processed_count)
         
         with col3:
-            unique_authors = len(set(item.get('author', 'Unknown') for item in enhanced_content))
+            unique_authors = len(set(safe_get(item, 'author', 'Unknown') for item in enhanced_content))
             st.metric("Authors", unique_authors)
         
         with col4:
-            total_tags = sum(len(item.get('semantic_tags', [])) for item in enhanced_content)
+            total_tags = sum(len(safe_get(item, 'semantic_tags', [])) for item in enhanced_content)
             st.metric("Semantic Tags", total_tags)
 
 @create_module_aware_component("enhanced_search", "library", ["library"], UserRole.READER)
@@ -485,7 +840,10 @@ def render_enhanced_search():
         search_component.render_search_analytics()
 
 def render_empty_library_state():
-    """Render an attractive empty state when no books are available."""
+    """
+    Render an attractive empty state when no books are available.
+    Option A: Direct navigation with state modification and rerun.
+    """
     st.markdown("---")
     
     # Center the empty state content
@@ -510,18 +868,23 @@ def render_empty_library_state():
             if st.button("📤 Upload Your First Book", 
                         type="primary", 
                         use_container_width=True,
-                        help="Go to Book Management to upload content"):
+                        help="Go to Book Management to upload content",
+                        key="empty_state_upload_btn"):
+                # CHANGE: Set the state before widget rendering completes
+                # Use st.rerun() instead of modifying after widget instantiation
                 st.session_state.page_selector = "📖 Book Management"
-                st.rerun()
+                st.rerun()  # Immediately rerun to apply the state change
         
         with col_b:
             if st.button("🔍 Learn More", 
                         use_container_width=True,
-                        help="Learn about Alexandria's features"):
+                        help="Learn about Alexandria's features",
+                        key="empty_state_learn_btn"):
+                # CHANGE: Use a different session state key to avoid conflicts
                 st.session_state.show_getting_started = True
-                st.rerun()
+                st.rerun()  # Rerun to show the getting started section
     
-    # Getting started guide
+    # Getting started guide (only show if flag is set)
     if st.session_state.get('show_getting_started', False):
         st.markdown("---")
         st.subheader("🚀 Getting Started with Alexandria")
@@ -549,7 +912,8 @@ def render_empty_library_state():
         
         st.info("💡 **Tip:** Start with a PDF or EPUB file for the best experience. Processing typically takes 30-60 seconds depending on file size.")
         
-        if st.button("❌ Close Guide"):
+        if st.button("❌ Close Guide", key="close_guide_btn"):
+            # CHANGE: Clear the flag and rerun to hide the guide
             st.session_state.show_getting_started = False
             st.rerun()
     
@@ -693,7 +1057,7 @@ def render_qa_chat():
     
     # Content selection for single content queries (using permission-filtered content)
     if query_mode == "Single Content Query":
-        content_options = {f"{item.get('title', 'Unknown')} - {item.get('author', 'Unknown')} [{item.get('module_type', 'library').title()}]": item.get('content_id') 
+        content_options = {f"{safe_get(item, 'title', 'Unknown')} - {safe_get(item, 'author', 'Unknown')} [{safe_get(item, 'module_type', 'library').title()}]": safe_get(item, 'content_id', f'item_{id(item)}') 
                           for item in accessible_content}
         
         selected_content_title = st.selectbox(
@@ -1070,6 +1434,20 @@ def render_content_relationships():
     # Render the relationship overview
     relationships_component.render_relationship_overview()
 
+def safe_get(item, key, default=None):
+    """
+    Safely get a value from an item, handling both dict and non-dict types.
+    
+    Args:
+        item: The item to get the value from (dict, string, or other type)
+        key (str): The key to get the value for
+        default: The default value to return if key is not found or item is not a dict
+    
+    Returns:
+        The value if found, otherwise the default value
+    """
+    return item.get(key, default) if isinstance(item, dict) else default
+
 def render_analytics_dashboard():
     """Render analytics and insights dashboard."""
     st.title("📊 Analytics Dashboard")
@@ -1077,8 +1455,60 @@ def render_analytics_dashboard():
     enhanced_content = get_enhanced_content_list()
     
     if not enhanced_content:
-        st.warning("📚 No data available for analytics.")
+        # Enhanced fallback message with navigation
+        col1, col2, col3 = st.columns([1, 2, 1])
+        
+        with col2:
+            st.markdown("""
+            <div style="text-align: center; padding: 2rem 0;">
+                <div style="font-size: 3rem; margin-bottom: 1rem;">📊</div>
+                <h3 style="color: #666; margin-bottom: 0.5rem;">No Analytics Available</h3>
+                <p style="color: #888; font-size: 1.1rem; margin-bottom: 2rem;">
+                    No books have been uploaded yet. Upload your first book to see analytics.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            if st.button("📤 Upload Your First Book", 
+                        type="primary", 
+                        use_container_width=True,
+                        help="Go to Book Management to upload content",
+                        key="analytics_upload_btn"):
+                st.session_state.page_selector = "📖 Book Management"
+                st.rerun()
         return
+    
+    # Normalize content items to ensure they are dictionaries
+    normalized_content = []
+    for i, item in enumerate(enhanced_content):
+        if isinstance(item, str):
+            # Handle string items by wrapping them in a dict
+            st.warning(f"⚠️ Analytics: Received unexpected string content: {item[:50]}...")
+            normalized_item = {
+                "content_id": item,
+                "title": "Unknown",
+                "author": "Unknown",
+                "content_type": "unknown",
+                "module_type": "library",
+                "processing_status": "unknown",
+                "semantic_tags": []
+            }
+            normalized_content.append(normalized_item)
+        elif isinstance(item, dict):
+            normalized_content.append(item)
+        else:
+            # Handle any other unexpected types
+            st.warning(f"⚠️ Analytics: Received unexpected content type: {type(item)}")
+            normalized_item = {
+                "content_id": str(item),
+                "title": "Unknown",
+                "author": "Unknown",
+                "content_type": "unknown", 
+                "module_type": "library",
+                "processing_status": "unknown",
+                "semantic_tags": []
+            }
+            normalized_content.append(normalized_item)
     
     # Overview metrics
     st.subheader("📈 Overview")
@@ -1086,24 +1516,24 @@ def render_analytics_dashboard():
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("Total Content", len(enhanced_content))
+        st.metric("Total Content", len(normalized_content))
     
     with col2:
-        processed_count = sum(1 for item in enhanced_content if item.get('processing_status') == 'completed')
+        processed_count = sum(1 for item in normalized_content if safe_get(item, 'processing_status') == 'completed')
         st.metric("Processed Items", processed_count)
     
     with col3:
-        total_tags = sum(len(item.get('semantic_tags', [])) for item in enhanced_content)
+        total_tags = sum(len(safe_get(item, 'semantic_tags', [])) for item in normalized_content)
         st.metric("Semantic Tags", total_tags)
     
     with col4:
-        unique_authors = len(set(item.get('author', 'Unknown') for item in enhanced_content))
+        unique_authors = len(set(safe_get(item, 'author', 'Unknown') for item in normalized_content))
         st.metric("Unique Authors", unique_authors)
     
     # Content type distribution
     st.subheader("📊 Content Distribution")
     
-    content_types = [item.get('content_type', 'unknown') for item in enhanced_content]
+    content_types = [safe_get(item, 'content_type', 'unknown') for item in normalized_content]
     type_counts = pd.Series(content_types).value_counts()
     
     if not type_counts.empty:
@@ -1118,8 +1548,13 @@ def render_analytics_dashboard():
     st.subheader("🏷️ Popular Tags")
     
     all_tags = []
-    for item in enhanced_content:
-        all_tags.extend(item.get('semantic_tags', []))
+    for item in normalized_content:
+        tags = safe_get(item, 'semantic_tags', [])
+        if isinstance(tags, list):
+            all_tags.extend(tags)
+        else:
+            # Handle case where semantic_tags is not a list
+            st.warning(f"⚠️ Invalid semantic_tags format for item: {safe_get(item, 'title', 'Unknown')}")
     
     if all_tags:
         tag_counts = pd.Series(all_tags).value_counts().head(20)

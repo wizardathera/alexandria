@@ -68,7 +68,10 @@
       "Bash(pip3 list:*)",
       "Bash(cat:*)",
       "Bash(pip3 install:*)",
-      "Bash(pip freeze)"
+      "Bash(pip freeze)",
+      "Bash(git reset:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ],
     "deny": []
   }

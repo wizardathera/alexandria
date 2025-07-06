@@ -261,6 +261,18 @@ class AdvancedSearchComponent:
     
     def render_result_card(self, result: Dict, index: int):
         """Render an individual search result card."""
+        # Generate unique, safe keys for buttons
+        content_id = result.get('content_id')
+        if content_id:
+            # Ensure content_id is string and sanitize for button key
+            content_id_str = str(content_id).replace(' ', '_').replace('-', '_')
+            ask_key = f"ask_{content_id_str}_{index}"
+            relations_key = f"relations_{content_id_str}_{index}"
+        else:
+            # Fallback to index-based keys when content_id is missing
+            ask_key = f"ask_result_{index}"
+            relations_key = f"relations_result_{index}"
+        
         with st.expander(
             f"📄 {result.get('title', 'Unknown Title')}", 
             expanded=index < 3  # Expand first 3 results
@@ -306,11 +318,11 @@ class AdvancedSearchComponent:
                 
                 # Actions
                 st.markdown("**⚡ Actions:**")
-                if st.button(f"💬 Ask Questions", key=f"ask_{result.get('content_id', index)}"):
+                if st.button(f"💬 Ask Questions", key=ask_key):
                     st.session_state.selected_content_for_chat = result
                     st.success("Content selected for Q&A!")
                 
-                if st.button(f"🔗 View Relations", key=f"relations_{result.get('content_id', index)}"):
+                if st.button(f"🔗 View Relations", key=relations_key):
                     st.session_state.selected_content_for_relations = result
                     st.success("View relationships!")
     

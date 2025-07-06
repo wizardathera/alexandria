@@ -101,7 +101,7 @@ class IngestionProgress:
 
 @dataclass
 class BookMetadata:
-    """Comprehensive book metadata."""
+    """Comprehensive book metadata with enhanced frontend support."""
     book_id: str
     title: str
     author: Optional[str] = None
@@ -112,6 +112,12 @@ class BookMetadata:
     upload_date: datetime = field(default_factory=datetime.now)
     ingestion_date: Optional[datetime] = None
     user_id: Optional[str] = None  # For Phase 2 multi-user support
+    
+    # Enhanced metadata from frontend confirmation
+    content_type: str = "book"  # book, article, document, etc.
+    language: str = "english"
+    module_type: str = "library"  # library, lms, marketplace
+    visibility: str = "public"   # public, private, organization
     
     # Content metrics
     text_length: int = 0
@@ -135,6 +141,10 @@ class BookMetadata:
             "upload_date": self.upload_date.isoformat(),
             "ingestion_date": self.ingestion_date.isoformat() if self.ingestion_date else None,
             "user_id": self.user_id,
+            "content_type": self.content_type,
+            "language": self.language,
+            "module_type": self.module_type,
+            "visibility": self.visibility,
             "text_length": self.text_length,
             "chunk_count": self.chunk_count,
             "embedding_dimension": self.embedding_dimension,
@@ -410,7 +420,7 @@ class BookIngestionService:
         embeddings: List[List[float]],
         metadata: BookMetadata
     ):
-        """Store documents and embeddings in vector database."""
+        """Store documents and embeddings in vector database and content database."""
         # Note: embeddings parameter is required for API compatibility but not used in current implementation
         _ = embeddings  # Explicitly mark as intentionally unused
         db = await get_database()
@@ -466,11 +476,114 @@ class BookIngestionService:
         
         logger.info(f"✅ Successfully stored {len(documents)} chunks in vector database")
         
-        # Also store book metadata separately for easy retrieval
+        # CHANGE: Create content database record after successful vector storage
+        await self._store_content_database_record(metadata)
+        
+        # Also store book metadata separately for easy retrieval (legacy support)
         await self._store_book_metadata(metadata)
     
+    async def _store_content_database_record(self, metadata: BookMetadata):
+        """
+        Store content record in the unified content database.
+        
+        Args:
+            metadata: Book metadata to store
+        """
+        try:
+            from src.services.content_service import get_content_service
+            from src.models import ContentItem, ModuleType, ContentType, ContentVisibility, ProcessingStatus
+            
+            logger.info(f"📊 Creating content database record for {metadata.book_id}")
+            
+            # Get content service
+            content_service = await get_content_service()
+            
+            # Map legacy metadata to unified content model
+            content_type_mapping = {
+                "book": ContentType.BOOK,
+                "article": ContentType.ARTICLE,
+                "document": ContentType.DOCUMENT,
+                "course": ContentType.COURSE,
+                "lesson": ContentType.LESSON
+            }
+            
+            module_type_mapping = {
+                "library": ModuleType.LIBRARY,
+                "lms": ModuleType.LMS,
+                "marketplace": ModuleType.MARKETPLACE
+            }
+            
+            visibility_mapping = {
+                "public": ContentVisibility.PUBLIC,
+                "private": ContentVisibility.PRIVATE,
+                "organization": ContentVisibility.ORGANIZATION,
+                "premium": ContentVisibility.PREMIUM
+            }
+            
+            # Create ContentItem from book metadata
+            content_item = ContentItem(
+                content_id=metadata.book_id,
+                module_type=module_type_mapping.get(metadata.module_type.lower(), ModuleType.LIBRARY),
+                content_type=content_type_mapping.get(metadata.content_type.lower(), ContentType.BOOK),
+                title=metadata.title,
+                description=f"Uploaded {metadata.content_type}: {metadata.file_name}",
+                author=metadata.author,
+                file_name=metadata.file_name,
+                file_path=metadata.file_path,
+                file_type=metadata.file_type,
+                file_size=metadata.file_size,
+                visibility=visibility_mapping.get(metadata.visibility.lower(), ContentVisibility.PUBLIC),
+                created_by="default_user",  # Phase 1: single user
+                organization_id=None,  # Phase 1: no organizations
+                processing_status=ProcessingStatus.COMPLETED,  # Set to completed after successful ingestion
+                text_length=metadata.text_length,
+                chunk_count=metadata.chunk_count,
+                topics=[],  # Will be populated by AI processing later
+                language=metadata.language.lower() if metadata.language else "en",
+                reading_level="unknown",  # Will be determined by AI later
+                module_metadata={
+                    "embedding_model": metadata.embedding_model,
+                    "embedding_dimension": metadata.embedding_dimension,
+                    "chunking_strategy": metadata.chunking_strategy,
+                    "original_upload_date": metadata.upload_date.isoformat(),
+                    "file_format": metadata.file_type
+                }
+            )
+            
+            # Set processing timestamps
+            content_item.processed_at = metadata.ingestion_date or datetime.now()
+            
+            # Check if content already exists (to prevent duplicates)
+            existing_content = await content_service.get_content_item(metadata.book_id)
+            if existing_content:
+                logger.info(f"📊 Content record already exists for {metadata.book_id}, updating instead")
+                # Update existing record with new processing info
+                existing_content.processing_status = ProcessingStatus.COMPLETED
+                existing_content.text_length = metadata.text_length
+                existing_content.chunk_count = metadata.chunk_count
+                existing_content.processed_at = metadata.ingestion_date or datetime.now()
+                existing_content.module_metadata.update(content_item.module_metadata)
+                
+                success = await content_service.update_content_item(existing_content)
+                if success:
+                    logger.info(f"✅ Updated content database record for {metadata.book_id}")
+                else:
+                    logger.error(f"❌ Failed to update content database record for {metadata.book_id}")
+            else:
+                # Create new content record
+                success = await content_service.create_content_item(content_item)
+                if success:
+                    logger.info(f"✅ Created content database record for {metadata.book_id}")
+                else:
+                    logger.error(f"❌ Failed to create content database record for {metadata.book_id}")
+                    
+        except Exception as e:
+            logger.error(f"❌ Error creating content database record for {metadata.book_id}: {e}")
+            # Don't fail the entire ingestion for database record issues
+            # The vector embeddings are already stored successfully
+    
     async def _store_book_metadata(self, metadata: BookMetadata):
-        """Store book metadata for easy retrieval."""
+        """Store book metadata for easy retrieval (legacy support)."""
         # For now, store as JSON file in data/users directory
         # In Phase 2, this would go to a proper database
         
@@ -531,6 +644,99 @@ class BookIngestionService:
         
         return False
     
+    async def migrate_existing_books_to_content_db(self) -> Dict[str, bool]:
+        """
+        Migrate existing books from JSON metadata files to content database.
+        
+        This method helps migrate books that were ingested before the content database
+        integration was added.
+        
+        Returns:
+            Dict[str, bool]: Migration results mapping book_id to success status
+        """
+        logger.info("🔄 Starting migration of existing books to content database")
+        
+        results = {}
+        metadata_dir = Path(self.settings.user_data_path)
+        
+        if not metadata_dir.exists():
+            logger.info("📂 No metadata directory found, no books to migrate")
+            return results
+        
+        # Find all metadata files
+        metadata_files = list(metadata_dir.glob("*_metadata.json"))
+        logger.info(f"📚 Found {len(metadata_files)} book metadata files to check")
+        
+        for metadata_file in metadata_files:
+            try:
+                # Load metadata from file
+                with open(metadata_file, 'r') as f:
+                    data = json.load(f)
+                
+                book_id = data.get('book_id')
+                if not book_id:
+                    logger.warning(f"⚠️ No book_id found in {metadata_file.name}")
+                    continue
+                
+                # Check if already exists in content database
+                try:
+                    from src.services.content_service import get_content_service
+                    content_service = await get_content_service()
+                    existing_content = await content_service.get_content_item(book_id)
+                    
+                    if existing_content:
+                        logger.info(f"✅ Book {book_id} already exists in content database")
+                        results[book_id] = True
+                        continue
+                        
+                except Exception as e:
+                    logger.error(f"❌ Error checking existing content for {book_id}: {e}")
+                    results[book_id] = False
+                    continue
+                
+                # Convert to BookMetadata and create content record
+                try:
+                    metadata = BookMetadata(
+                        book_id=book_id,
+                        title=data.get('title', 'Unknown Title'),
+                        author=data.get('author', 'Unknown'),
+                        file_type=data.get('file_type', 'unknown'),
+                        file_name=data.get('file_name', 'unknown'),
+                        file_path=data.get('file_path', ''),
+                        file_size=data.get('file_size', 0),
+                        upload_date=datetime.fromisoformat(data.get('upload_date', datetime.now().isoformat())),
+                        user_id=data.get('user_id'),
+                        content_type=data.get('content_type', 'book'),
+                        language=data.get('language', 'english'),
+                        module_type=data.get('module_type', 'library'),
+                        visibility=data.get('visibility', 'public'),
+                        text_length=data.get('text_length', 0),
+                        chunk_count=data.get('chunk_count', 0),
+                        embedding_dimension=data.get('embedding_dimension', 0),
+                        chunking_strategy=data.get('chunking_strategy', 'recursive'),
+                        embedding_model=data.get('embedding_model', 'text-embedding-ada-002'),
+                        ingestion_date=datetime.fromisoformat(data['ingestion_date']) if data.get('ingestion_date') else None
+                    )
+                    
+                    # Create content database record
+                    await self._store_content_database_record(metadata)
+                    results[book_id] = True
+                    logger.info(f"✅ Migrated book {book_id} to content database")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Failed to migrate book {book_id}: {e}")
+                    results[book_id] = False
+                    
+            except Exception as e:
+                logger.error(f"❌ Error processing metadata file {metadata_file.name}: {e}")
+                continue
+        
+        successful = sum(1 for success in results.values() if success)
+        total = len(results)
+        logger.info(f"🎉 Migration completed: {successful}/{total} books migrated successfully")
+        
+        return results
+
     async def delete_book(self, book_id: str) -> bool:
         """
         Delete a book and all its data.
@@ -542,6 +748,15 @@ class BookIngestionService:
             bool: True if deletion was successful
         """
         try:
+            # Remove from content database
+            try:
+                from src.services.content_service import get_content_service
+                content_service = await get_content_service()
+                await content_service.delete_content_item(book_id)
+                logger.info(f"🗑️ Removed {book_id} from content database")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not remove {book_id} from content database: {e}")
+            
             # Remove from vector database
             db = await get_database()
             collection_name = self.settings.chroma_collection_name
@@ -560,7 +775,7 @@ class BookIngestionService:
                     # This would need to be implemented in the database interface
                     pass
             
-            # Remove metadata file
+            # Remove metadata file (legacy support)
             metadata_file = Path(self.settings.user_data_path) / f"{book_id}_metadata.json"
             if metadata_file.exists():
                 await asyncio.to_thread(metadata_file.unlink)

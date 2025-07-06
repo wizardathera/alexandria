@@ -54,9 +54,36 @@ class RelationshipVisualizationComponent:
         col1, col2 = st.columns([3, 1])
         
         with col1:
+            # Normalize content items to ensure they are dictionaries
+            normalized_content = []
+            for item in content_list:
+                if isinstance(item, str):
+                    # Handle string items by wrapping them in a dict
+                    st.warning(f"⚠️ Received unexpected string content: {item}")
+                    normalized_item = {
+                        "content_id": item,
+                        "title": "Unknown",
+                        "author": "Unknown",
+                        "content_type": "unknown",
+                        "module_type": "unknown"
+                    }
+                elif isinstance(item, dict):
+                    normalized_item = item
+                else:
+                    # Handle any other unexpected types
+                    st.warning(f"⚠️ Received unexpected content type: {type(item)}")
+                    normalized_item = {
+                        "content_id": str(item),
+                        "title": "Unknown",
+                        "author": "Unknown", 
+                        "content_type": "unknown",
+                        "module_type": "unknown"
+                    }
+                normalized_content.append(normalized_item)
+            
             content_options = {
                 f"{item.get('title', 'Unknown')} - {item.get('author', 'Unknown')}": item
-                for item in content_list
+                for item in normalized_content
             }
             
             selected_title = st.selectbox(

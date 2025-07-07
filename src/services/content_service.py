@@ -227,7 +227,62 @@ class ContentService:
         for index in indexes:
             self.connection.execute(index)
         
+        # Phase 1: Create default user for single-user mode
+        await self._create_default_user()
+        
         logger.info("Database tables and indexes created successfully")
+    
+    async def _create_default_user(self):
+        """
+        Create a default user for Phase 1 (single-user mode).
+        
+        This ensures the foreign key constraints work properly when creating content items.
+        """
+        try:
+            # Check if default user already exists
+            result = self.connection.execute(
+                "SELECT user_id FROM users WHERE user_id = ?", 
+                ("default_user",)
+            ).fetchone()
+            
+            if result:
+                logger.info("Default user already exists, skipping creation")
+                return
+            
+            # Create default user for Phase 1
+            from datetime import datetime
+            now = datetime.now().isoformat()
+            
+            self.connection.execute("""
+                INSERT INTO users (
+                    user_id, email, username, role, organization_id, permissions,
+                    full_name, avatar_url, bio, preferences, notification_settings,
+                    created_at, last_login, is_active, is_verified, subscription_tier
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                "default_user",
+                "default@alexandria.local",
+                "default_user",
+                "admin",  # Admin role for Phase 1
+                None,  # No organization
+                '["read", "write", "admin"]',  # Full permissions
+                "Default User",
+                None,  # No avatar
+                "Default user for Phase 1 single-user mode",
+                '{"theme": "light", "language": "en"}',  # Default preferences
+                '{"email": true, "push": false}',  # Default notifications
+                now,
+                now,
+                True,  # Active
+                True,  # Verified
+                "free"  # Free tier
+            ))
+            
+            logger.info("✅ Created default user for Phase 1 single-user mode")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to create default user: {e}")
+            raise
     
     # ========================================
     # Content Item Management
@@ -366,13 +421,17 @@ class ContentService:
             # Add permission filtering
             if user:
                 if user.role != UserRole.ADMIN:
+                    # FIXED: Permission filtering with proper NULL handling
                     query += """ AND (
                         visibility = 'public' OR
                         (visibility = 'private' AND created_by = ?) OR
-                        (visibility = 'organization' AND organization_id = ?) OR
+                        (visibility = 'organization' AND organization_id = ? AND ? IS NOT NULL) OR
                         (visibility = 'premium' AND ? IN ('pro', 'enterprise'))
                     )"""
-                    params.extend([user.user_id, user.organization_id, user.subscription_tier])
+                    # Use organization_id twice: once for comparison, once for NULL check
+                    org_id = user.organization_id
+                    subscription = user.subscription_tier or "free"  # Handle None subscription
+                    params.extend([user.user_id, org_id, org_id, subscription])
             else:
                 # Only public content for anonymous users
                 query += " AND visibility = 'public'"
@@ -384,10 +443,15 @@ class ContentService:
             
             content_items = []
             for row in rows:
-                content = self._row_to_content_item(row)
-                content_items.append(content)
-                # Update cache
-                self._content_cache[content.content_id] = content
+                try:
+                    content = self._row_to_content_item(row)
+                    content_items.append(content)
+                    # Update cache
+                    self._content_cache[content.content_id] = content
+                except Exception as e:
+                    logger.error(f"Failed to convert row to ContentItem: {e}")
+                    # Continue processing other rows
+                    continue
             
             return content_items
             
@@ -433,14 +497,17 @@ class ContentService:
                     # Admins can see all content
                     pass
                 else:
-                    # Apply permission filtering
+                    # FIXED: Permission filtering with proper NULL handling
                     query += """ AND (
                         visibility = 'public' OR
                         (visibility = 'private' AND created_by = ?) OR
-                        (visibility = 'organization' AND organization_id = ?) OR
+                        (visibility = 'organization' AND organization_id = ? AND ? IS NOT NULL) OR
                         (visibility = 'premium' AND ? IN ('pro', 'enterprise'))
                     )"""
-                    params.extend([user.user_id, user.organization_id, user.subscription_tier])
+                    # Use organization_id twice: once for comparison, once for NULL check
+                    org_id = user.organization_id
+                    subscription = user.subscription_tier or "free"  # Handle None subscription
+                    params.extend([user.user_id, org_id, org_id, subscription])
             else:
                 # Only public content for anonymous users
                 query += " AND visibility = 'public'"

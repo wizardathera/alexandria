@@ -15,6 +15,7 @@ import networkx as nx
 from typing import Dict, List, Any, Optional, Tuple
 import random
 import math
+from ..core.api_client import get_enhanced_content_list, get_content_relationships as api_get_content_relationships
 
 
 class RelationshipVisualizationComponent:
@@ -25,23 +26,11 @@ class RelationshipVisualizationComponent:
     
     def get_content_relationships(self, content_id: str) -> List[Dict]:
         """Get content relationships from the backend API."""
-        try:
-            response = requests.get(f"{self.api_base_url}/api/enhanced/content/{content_id}/relationships")
-            response.raise_for_status()
-            return response.json().get("relationships", [])
-        except requests.exceptions.RequestException as e:
-            st.error(f"Failed to fetch relationships: {e}")
-            return []
+        return api_get_content_relationships(content_id)
     
     def get_all_content_for_network(self) -> List[Dict]:
         """Get all content items for network visualization."""
-        try:
-            response = requests.get(f"{self.api_base_url}/api/enhanced/content")
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.RequestException as e:
-            st.error(f"Failed to fetch content for network: {e}")
-            return []
+        return get_enhanced_content_list()
     
     def render_content_selector(self, content_list: List[Dict]) -> Optional[Dict]:
         """Render content selection interface."""

@@ -19,6 +19,7 @@ from src.models import (
 from src.services.enhanced_embedding_service import get_enhanced_embedding_service
 from src.services.content_service import get_content_service
 from src.utils.logger import get_logger
+from src.utils.ai_providers import get_ai_provider_manager
 
 logger = get_logger(__name__)
 
@@ -36,6 +37,7 @@ class EnhancedSearchRequest(BaseModel):
     content_type_filter: Optional[ContentType] = Field(None, description="Filter by content type")
     n_results: int = Field(10, ge=1, le=50, description="Number of results to return")
     include_relationships: bool = Field(True, description="Include content relationships")
+    generate_answer: bool = Field(True, description="Generate AI answer summary from results")
 
 
 class EnhancedSearchResult(BaseModel):
@@ -61,6 +63,10 @@ class EnhancedSearchResponse(BaseModel):
     results: List[EnhancedSearchResult]
     search_time_ms: float
     user_permissions_applied: bool
+    answer_text: Optional[str] = Field(None, description="AI-generated answer summary")
+    answer_generated: bool = Field(False, description="Whether answer was successfully generated")
+    answer_confidence: Optional[float] = Field(None, description="Confidence score for generated answer")
+    sources_used_for_answer: Optional[int] = Field(None, description="Number of sources used for answer generation")
 
 
 class ContentRecommendation(BaseModel):
@@ -120,6 +126,125 @@ async def get_current_user() -> Optional[User]:
 
 
 # ========================================
+# Helper Functions
+# ========================================
+
+async def generate_answer_from_search_results(
+    query: str, 
+    search_results: List[Dict], 
+    max_sources: int = 5
+) -> Dict[str, Any]:
+    """
+    Generate an AI answer summary from search results.
+    
+    Args:
+        query: The original search query
+        search_results: List of search result dictionaries
+        max_sources: Maximum number of sources to use for answer generation
+    
+    Returns:
+        Dictionary with answer_text, confidence, and metadata
+    """
+    try:
+        # Get top sources based on similarity scores
+        top_results = sorted(
+            search_results, 
+            key=lambda x: x.get('similarity_score', 0), 
+            reverse=True
+        )[:max_sources]
+        
+        if not top_results:
+            return {
+                "answer_text": None,
+                "answer_generated": False,
+                "answer_confidence": None,
+                "sources_used": 0,
+                "error": "No search results available for answer generation"
+            }
+        
+        # Extract and concatenate text chunks from search results
+        chunks_text = []
+        for result in top_results:
+            # Get chunk text from the result (adjust field names as needed)
+            chunk_text = result.get('chunk_text') or result.get('excerpt') or result.get('content', '')
+            if chunk_text:
+                # Add source information to the chunk
+                source_info = f"[Source: {result.get('title', 'Unknown')} by {result.get('author', 'Unknown')}]"
+                chunks_text.append(f"{source_info}\n{chunk_text}")
+        
+        if not chunks_text:
+            return {
+                "answer_text": None,
+                "answer_generated": False,
+                "answer_confidence": None,
+                "sources_used": 0,
+                "error": "No text content found in search results"
+            }
+        
+        # Concatenate all chunks with separators
+        concatenated_context = "\n\n---\n\n".join(chunks_text)
+        
+        # Create the prompt for answer generation
+        system_prompt = """You are a helpful research assistant. Answer the question below using the provided context.
+
+Guidelines:
+- Use only information from the provided context
+- If the context doesn't contain enough information, say so clearly
+- Cite sources when possible by mentioning the source titles
+- Be concise but comprehensive
+- If the question cannot be answered from the context, explain what information is available instead"""
+
+        user_message = f"""Question: {query}
+
+Context:
+{concatenated_context}
+
+Please provide a helpful answer based on the context above."""
+
+        # Generate answer using AI provider
+        ai_manager = await get_ai_provider_manager()
+        
+        messages = [
+            {"role": "user", "content": user_message}
+        ]
+        
+        # Generate the answer
+        ai_response = await ai_manager.generate_text(
+            messages=messages,
+            system_prompt=system_prompt,
+            max_tokens=1000,
+            temperature=0.3  # Lower temperature for more consistent answers
+        )
+        
+        # Calculate confidence based on similarity scores and AI response quality
+        avg_similarity = sum(r.get('similarity_score', 0) for r in top_results) / len(top_results)
+        answer_confidence = min(avg_similarity * 1.2, 1.0)  # Boost slightly but cap at 1.0
+        
+        return {
+            "answer_text": ai_response.content,
+            "answer_generated": True,
+            "answer_confidence": answer_confidence,
+            "sources_used": len(top_results),
+            "ai_model_used": ai_response.model,
+            "token_usage": {
+                "prompt_tokens": ai_response.usage_metrics.prompt_tokens,
+                "completion_tokens": ai_response.usage_metrics.completion_tokens,
+                "total_tokens": ai_response.usage_metrics.total_tokens
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Answer generation failed: {e}")
+        return {
+            "answer_text": None,
+            "answer_generated": False,
+            "answer_confidence": None,
+            "sources_used": 0,
+            "error": f"Answer generation failed: {str(e)}"
+        }
+
+
+# ========================================
 # Enhanced Search Endpoints
 # ========================================
 
@@ -155,8 +280,36 @@ async def enhanced_search(
         
         # Convert to response format
         enhanced_results = []
-        for result in search_results.get("enhanced_results", []):
+        raw_results = search_results.get("enhanced_results", [])
+        for result in raw_results:
             enhanced_results.append(EnhancedSearchResult(**result))
+        
+        # Generate AI answer summary if requested and results available
+        answer_data = {}
+        if request.generate_answer and raw_results:
+            logger.info(f"Generating AI answer for query: '{request.query}' using {len(raw_results)} results")
+            answer_data = await generate_answer_from_search_results(
+                query=request.query,
+                search_results=raw_results,
+                max_sources=5
+            )
+        elif request.generate_answer and not raw_results:
+            # No results available for answer generation
+            answer_data = {
+                "answer_text": None,
+                "answer_generated": False,
+                "answer_confidence": None,
+                "sources_used": 0,
+                "error": "No search results available for answer generation"
+            }
+        else:
+            # Answer generation not requested
+            answer_data = {
+                "answer_text": None,
+                "answer_generated": False,
+                "answer_confidence": None,
+                "sources_used": 0
+            }
         
         search_time = (datetime.now() - start_time).total_seconds() * 1000
         
@@ -165,7 +318,11 @@ async def enhanced_search(
             total_results=len(enhanced_results),
             results=enhanced_results,
             search_time_ms=search_time,
-            user_permissions_applied=current_user is not None
+            user_permissions_applied=current_user is not None,
+            answer_text=answer_data.get("answer_text"),
+            answer_generated=answer_data.get("answer_generated", False),
+            answer_confidence=answer_data.get("answer_confidence"),
+            sources_used_for_answer=answer_data.get("sources_used")
         )
         
         # Add helpful message if no results found
@@ -175,6 +332,10 @@ async def enhanced_search(
             # This is more appropriate for search operations
         else:
             logger.info(f"Enhanced search completed: '{request.query}' -> {len(enhanced_results)} results in {search_time:.1f}ms")
+            if answer_data.get("answer_generated"):
+                logger.info(f"AI answer generated using {answer_data.get('sources_used', 0)} sources")
+            elif request.generate_answer:
+                logger.warning(f"AI answer generation failed: {answer_data.get('error', 'Unknown error')}")
         
         return response
         
